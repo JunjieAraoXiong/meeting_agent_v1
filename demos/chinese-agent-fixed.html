@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>飞书会议助手 - Meeting Agent (Fixed)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+        }
+        .transcript-item { 
+            transition: opacity 0.3s ease; 
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        .revealed { opacity: 1; background: white; }
+        .hidden { opacity: 0.4; background: #f9f9f9; }
+        .highlight { 
+            background: #fef3c7; 
+            padding: 2px 4px; 
+            border-radius: 4px; 
+            cursor: pointer;
+            font-weight: 500;
+        }
+        .highlight:hover { background: #fde047; }
+        .chinese-text {
+            line-height: 1.6;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="container mx-auto p-4">
+        <h1 class="text-2xl font-bold mb-4">🎯 飞书会议助手 - Feishu Meeting Agent (Fixed)</h1>
+        
+        <!-- Controls -->
+        <div class="bg-white rounded-lg shadow p-4 mb-4">
+            <div class="flex gap-2 mb-4">
+                <button id="playBtn" class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600">▶️ 播放</button>
+                <button id="resetBtn" class="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600">🔄 重置</button>
+                <button id="pasteBtn" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">📋 粘贴转录</button>
+                <label for="fileInput" class="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 cursor-pointer">📁 上传文件</label>
+                <input type="file" id="fileInput" accept=".txt" style="display: none;">
+                <button id="loadSample1" class="px-3 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600">📄 示例1</button>
+                <button id="loadSample2" class="px-3 py-2 bg-orange-500 text-white rounded hover:bg-orange-600">📄 示例2</button>
+            </div>
+            
+            <!-- File info -->
+            <div id="fileInfo" class="mb-2 text-sm text-gray-600 hidden">
+                已加载文件: <span id="fileName"></span>
+            </div>
+            
+            <!-- Timeline -->
+            <div class="flex items-center gap-2 mb-2">
+                <span id="currentTime" class="text-sm font-mono w-12">0:00</span>
+                <input type="range" id="timeline" min="0" max="300" value="0" class="flex-1">
+                <span id="maxTime" class="text-sm font-mono w-12">5:00</span>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <!-- Left: Transcript -->
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h2 class="text-lg font-semibold mb-3">📜 会议转录</h2>
+                    <div id="transcript" class="space-y-2 max-h-96 overflow-y-auto">
+                        <!-- Transcript items will be inserted here -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Right: Terms -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h2 class="text-lg font-semibold mb-3">📖 关键术语</h2>
+                    <div id="activeTerm" class="text-blue-600 font-semibold mb-2">点击高亮术语查看定义</div>
+                    <div id="termDefinition" class="text-gray-600 text-sm mb-4 chinese-text">术语会随着会议进度逐渐显示。</div>
+                    <div id="termsList" class="flex flex-wrap gap-1">
+                        <!-- Terms will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Performance Metrics -->
+        <div class="bg-white rounded-lg shadow p-4 mt-4">
+            <h2 class="text-lg font-semibold mb-3">📊 性能指标</h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                    <span class="text-gray-600">解析时间:</span>
+                    <span id="parseTime" class="font-mono">-</span>
+                </div>
+                <div>
+                    <span class="text-gray-600">片段数量:</span>
+                    <span id="segmentCount" class="font-mono">-</span>
+                </div>
+                <div>
+                    <span class="text-gray-600">术语数量:</span>
+                    <span id="termCount" class="font-mono">-</span>
+                </div>
+                <div>
+                    <span class="text-gray-600">文件大小:</span>
+                    <span id="fileSize" class="font-mono">-</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Paste Modal -->
+    <div id="pasteModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-lg p-6 w-full max-w-2xl m-4">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold">📋 粘贴转录文本</h3>
+                <button id="closeModal" class="text-gray-500 hover:text-gray-700">✕</button>
+            </div>
+            <textarea id="pasteArea" class="w-full h-64 border rounded p-3 font-mono text-sm chinese-text" 
+                placeholder="在此粘贴飞书转录文本...
+
+格式示例:
+汤欣钰 00:00
+会议内容...
+
+说话人 1 01:30
+更多内容..."></textarea>
+            <div class="flex justify-end gap-2 mt-4">
+                <button id="cancelPaste" class="px-4 py-2 bg-gray-300 rounded hover:bg-gray-400">取消</button>
+                <button id="loadTranscript" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">加载</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Sample data embedded directly
+        const SAMPLE_TRANSCRIPT_1 = \`汤欣钰 00:00
+猫戴在身上，然后又有定位，又有糖包与翻译。嗯，去年好像就有这个，好像就有一个，去年好像有一个类似的，就是也戴在什么身上啊？狗啊？对啊，那个网站的哪里啊？那个有没有总的那个 list？如果单独发一个，OK，我来发一个这种的 list，先，这个先到，我发也行，张老师不用发。
+
+汤欣钰 00:56
+然后，嗯，要不然我们先说，嗯，就明天，不是还是下午有那个周会嘛？嗯，对，就大家最近有没有什么困难？然后以及有没有识别到什么机会、想法的？然后其他的就是例行的，比如在会上就例行同步了。主要是我觉得大会前没有什么要决策的。对，一个是那个我知道的，一个是志旭那边，对吧？他手机测这个开发的资源，或者说这种能力我们还比较短缺一些，是吧？行，这个是已经知道了。
+
+汤欣钰 01:36
+对，我看这个黑马项目他们都有在全捷 OA 上部署一些 1.5B 的端观测模型。嗯，完全是比我们这个参数量要大得多，然后好像还行，那可以联系下他们，是吧？反正就是那个黑马，这个马拉松上，对，我觉得可能那些人也很重要，看哪些人有意思，然后跟他们聊一聊。\`;
+
+        const SAMPLE_TRANSCRIPT_2 = \`说话人 1 00:01
+大部门的话一般也对齐到 7 月那种，月初其他的组织架构可能已经显示。昨天我也跟大家几个相关的聊了聊，就是我不知道大家怎么感受。我感觉现在这几个方向还是有一些困难。待会儿也会讨论一下这些困难，以及我们应对的一些策略。好，所以有些困难首先还是正常的，或者说未来可能还会更多一些。
+
+说话人 1 01:42
+然后我们现在，比如一个是新知的跟踪或者获取的任务，还有日常的会议纪要也好，one-one 的这种会，是吧？职场人每天都要开各种会。这样的话，其实大家应该记得之前两个区域都表达过这很痛，然后我自己其实也很痛。每天信息量看不过来，对吧？生怕漏掉什么。
+
+说话人 2 19:14
+我觉得玩具其实是音箱的下一个形态。可能现在玩具差的是各种传感器之间的联动。如果能做到控制手机、控制家里设备，音箱就不需要了。\`;
+
+        // Global variables
+        let segments = [];
+        let terms = new Set();
+        let isPlaying = false;
+        let currentIndex = 0;
+        let interval;
+        let selectedTerm = null;
+
+        // Performance tracking
+        let performanceMetrics = {
+            parseTime: 0,
+            segmentCount: 0,
+            termCount: 0,
+            fileSize: 0
+        };
+
+        // Utility functions
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return \`\${mins}:\${secs.toString().padStart(2, '0')}\`;
+        }
+
+        function parseTime(timeStr) {
+            if (!timeStr) return 0;
+            const parts = timeStr.split(':').map(Number);
+            if (parts.length === 2) return parts[0] * 60 + parts[1];
+            if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+            return 0;
+        }
+
+        // Parse transcript with performance tracking
+        function parseTranscript(text) {
+            const startTime = performance.now();
+            
+            const lines = text.split('\\n').filter(line => line.trim());
+            const parsed = [];
+            let currentSpeaker = '';
+            let currentTime = 0;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                
+                // Check if line contains speaker and time (e.g., "汤欣钰 00:00" or "说话人 1 01:42")
+                const speakerMatch = line.match(/^(.+?)\\s+(\\d{1,2}:\\d{2})$/);
+                if (speakerMatch) {
+                    currentSpeaker = speakerMatch[1];
+                    currentTime = parseTime(speakerMatch[2]);
+                    continue;
+                }
+                
+                // Content line
+                if (line && currentSpeaker) {
+                    parsed.push({
+                        speaker: currentSpeaker,
+                        timeSeconds: currentTime,
+                        text: line,
+                        timestamp: formatTime(currentTime)
+                    });
+                    currentTime += 20; // Assume 20 seconds between segments
+                }
+            }
+            
+            const endTime = performance.now();
+            performanceMetrics.parseTime = (endTime - startTime).toFixed(2);
+            performanceMetrics.segmentCount = parsed.length;
+            
+            return parsed;
+        }
+
+        // Extract terms with performance tracking
+        function extractTerms(segments) {
+            const termSet = new Set();
+            const text = segments.map(s => s.text).join(' ');
+            
+            // Extract Chinese terms (2-4 characters)
+            const chineseTerms = text.match(/[\\u4e00-\\u9fa5]{2,4}/g) || [];
+            chineseTerms.forEach(term => {
+                if (!/^(这个|那个|就是|然后|但是|如果|所以|因为|可能|应该|需要)$/.test(term)) {
+                    termSet.add(term);
+                }
+            });
+            
+            // Extract English terms
+            const englishTerms = text.match(/[A-Z][A-Za-z]{2,}/g) || [];
+            englishTerms.forEach(term => termSet.add(term));
+            
+            // Extract acronyms
+            const acronyms = text.match(/\\b[A-Z]{2,5}\\b/g) || [];
+            acronyms.forEach(term => termSet.add(term));
+            
+            performanceMetrics.termCount = termSet.size;
+            return Array.from(termSet).slice(0, 20); // Limit to top 20 terms
+        }
+
+        // Render functions
+        function renderTranscript() {
+            const container = document.getElementById('transcript');
+            container.innerHTML = segments.map((segment, index) => {
+                const isRevealed = index <= currentIndex;
+                const className = isRevealed ? 'revealed' : 'hidden';
+                const highlightedText = highlightTerms(segment.text, terms);
+                
+                return \`
+                    <div class="transcript-item \${className} p-3 rounded border">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-xs text-gray-500 font-mono">\${segment.timestamp}</span>
+                            <span class="text-xs bg-gray-100 px-2 py-1 rounded">\${segment.speaker}</span>
+                        </div>
+                        <div class="chinese-text">\${highlightedText}</div>
+                    </div>
+                \`;
+            }).join('');
+        }
+
+        function highlightTerms(text, terms) {
+            let highlighted = text;
+            terms.forEach(term => {
+                const regex = new RegExp(\`\\\\b\${term}\\\\b\`, 'gi');
+                highlighted = highlighted.replace(regex, \`<span class="highlight" onclick="selectTerm('\${term}')">\${term}</span>\`);
+            });
+            return highlighted;
+        }
+
+        function renderTerms() {
+            const container = document.getElementById('termsList');
+            container.innerHTML = Array.from(terms).map(term => 
+                \`<span class="px-2 py-1 bg-blue-100 text-blue-800 rounded text-sm cursor-pointer hover:bg-blue-200" onclick="selectTerm('\${term}')">\${term}</span>\`
+            ).join('');
+        }
+
+        function selectTerm(term) {
+            selectedTerm = term;
+            document.getElementById('activeTerm').textContent = term;
+            document.getElementById('termDefinition').textContent = \`"\${term}" 在会议中出现了多次，点击高亮查看上下文。\`;
+        }
+
+        function updatePerformanceDisplay() {
+            document.getElementById('parseTime').textContent = \`\${performanceMetrics.parseTime}ms\`;
+            document.getElementById('segmentCount').textContent = performanceMetrics.segmentCount;
+            document.getElementById('termCount').textContent = performanceMetrics.termCount;
+            document.getElementById('fileSize').textContent = \`\${performanceMetrics.fileSize}KB\`;
+        }
+
+        // File loading
+        function loadTranscriptData(text, filename = '示例文件') {
+            console.log('开始解析转录文本...');
+            performanceMetrics.fileSize = (text.length / 1024).toFixed(1);
+            
+            segments = parseTranscript(text);
+            terms = new Set(extractTerms(segments));
+            
+            reset();
+            renderTerms();
+            updatePerformanceDisplay();
+            
+            // Show file info
+            document.getElementById('fileName').textContent = filename;
+            document.getElementById('fileInfo').classList.remove('hidden');
+            
+            console.log(\`加载完成: \${segments.length} 个片段, \${terms.size} 个术语\`);
+            
+            // Update timeline max
+            if (segments.length > 0) {
+                const maxTime = Math.max(...segments.map(s => s.timeSeconds));
+                document.getElementById('timeline').max = maxTime;
+                document.getElementById('maxTime').textContent = formatTime(maxTime);
+            }
+        }
+
+        // Play/pause
+        function togglePlay() {
+            const btn = document.getElementById('playBtn');
+            if (isPlaying) {
+                clearInterval(interval);
+                btn.textContent = '▶️ 播放';
+            } else {
+                interval = setInterval(() => {
+                    if (currentIndex < segments.length - 1) {
+                        currentIndex++;
+                        renderTranscript();
+                        
+                        const currentTime = segments[currentIndex].timeSeconds;
+                        document.getElementById('timeline').value = currentTime;
+                        document.getElementById('currentTime').textContent = formatTime(currentTime);
+                    } else {
+                        togglePlay(); // Stop at end
+                    }
+                }, 2000); // 2 seconds per segment
+                btn.textContent = '⏸️ 暂停';
+            }
+            isPlaying = !isPlaying;
+        }
+
+        function reset() {
+            clearInterval(interval);
+            isPlaying = false;
+            currentIndex = 0;
+            document.getElementById('playBtn').textContent = '▶️ 播放';
+            document.getElementById('timeline').value = 0;
+            document.getElementById('currentTime').textContent = '0:00';
+            renderTranscript();
+        }
+
+        // Initialize
+        function init() {
+            console.log('初始化会议助手...');
+            
+            // Load sample data
+            loadTranscriptData(SAMPLE_TRANSCRIPT_1, '示例转录');
+            
+            // Event listeners
+            document.getElementById('playBtn').onclick = togglePlay;
+            document.getElementById('resetBtn').onclick = reset;
+            
+            // File input
+            document.getElementById('fileInput').onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        loadTranscriptData(e.target.result, file.name);
+                    };
+                    reader.readAsText(file, 'UTF-8');
+                }
+            };
+            
+            // Sample buttons
+            document.getElementById('loadSample1').onclick = () => {
+                loadTranscriptData(SAMPLE_TRANSCRIPT_1, '示例1 - 汤欣钰会议');
+            };
+            
+            document.getElementById('loadSample2').onclick = () => {
+                loadTranscriptData(SAMPLE_TRANSCRIPT_2, '示例2 - 说话人会议');
+            };
+            
+            // Paste modal
+            document.getElementById('pasteBtn').onclick = () => {
+                document.getElementById('pasteModal').classList.remove('hidden');
+                document.getElementById('pasteModal').classList.add('flex');
+            };
+            
+            document.getElementById('closeModal').onclick = 
+            document.getElementById('cancelPaste').onclick = () => {
+                document.getElementById('pasteModal').classList.add('hidden');
+                document.getElementById('pasteModal').classList.remove('flex');
+            };
+            
+            document.getElementById('loadTranscript').onclick = () => {
+                const newText = document.getElementById('pasteArea').value;
+                if (newText.trim()) {
+                    loadTranscriptData(newText, '粘贴的文本');
+                }
+                document.getElementById('pasteModal').classList.add('hidden');
+                document.getElementById('pasteModal').classList.remove('flex');
+            };
+            
+            // Timeline control
+            document.getElementById('timeline').oninput = (e) => {
+                const targetTime = parseInt(e.target.value);
+                currentIndex = segments.findIndex(seg => seg.timeSeconds > targetTime) - 1;
+                if (currentIndex < 0) currentIndex = segments.length - 1;
+                renderTranscript();
+                document.getElementById('currentTime').textContent = formatTime(targetTime);
+            };
+        }
+
+        // Make selectTerm global for onclick
+        window.selectTerm = selectTerm;
+
+        // Start when page loads
+        document.addEventListener('DOMContentLoaded', init);
+        
+        console.log('脚本加载成功');
+    </script>
+</body>
+</html>

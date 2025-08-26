@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E-Meet RAG System Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; 
+        }
+        .loading-dots {
+            animation: loading 1.5s infinite;
+        }
+        @keyframes loading {
+            0%, 20% { opacity: 0; }
+            50% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="container mx-auto p-6 max-w-4xl">
+        <div class="bg-white rounded-xl shadow-lg p-6">
+            <div class="text-center mb-8">
+                <h1 class="text-3xl font-bold text-gray-800 mb-2">🤖 E-Meet RAG System Demo</h1>
+                <p class="text-gray-600">Intelligent Meeting Search & Analysis</p>
+            </div>
+
+            <!-- Quick Test Section -->
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                <h2 class="text-lg font-semibold text-blue-800 mb-3">🚀 Quick Test</h2>
+                <p class="text-blue-700 text-sm mb-3">
+                    This demo tests the RAG system with sample meeting data. Click "Run Demo" to see intelligent search in action!
+                </p>
+                <div class="flex gap-2">
+                    <button onclick="runDemo()" id="demoBtn" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                        🎯 Run Demo
+                    </button>
+                    <button onclick="clearResults()" class="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors">
+                        🗑️ Clear
+                    </button>
+                </div>
+            </div>
+
+            <!-- Status Panel -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div class="bg-white border rounded-lg p-4">
+                    <div class="text-sm text-gray-600">Vector Count</div>
+                    <div id="vectorCount" class="text-2xl font-bold text-blue-600">0</div>
+                </div>
+                <div class="bg-white border rounded-lg p-4">
+                    <div class="text-sm text-gray-600">Processing Status</div>
+                    <div id="status" class="text-lg font-medium text-gray-800">Ready</div>
+                </div>
+                <div class="bg-white border rounded-lg p-4">
+                    <div class="text-sm text-gray-600">Last Query Time</div>
+                    <div id="queryTime" class="text-lg font-medium text-green-600">-</div>
+                </div>
+            </div>
+
+            <!-- Test Queries -->
+            <div class="bg-gray-50 rounded-lg p-4 mb-6">
+                <h3 class="text-lg font-semibold mb-3">🎯 Try These Test Queries</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <button onclick="testQuery('黑马项目是什么？')" class="text-left p-3 bg-white border rounded-lg hover:bg-blue-50 hover:border-blue-300 transition-colors">
+                        <div class="font-medium">黑马项目是什么？</div>
+                        <div class="text-sm text-gray-600">Project information query</div>
+                    </button>
+                    <button onclick="testQuery('会议中提到了什么困难？')" class="text-left p-3 bg-white border rounded-lg hover:bg-blue-50 hover:border-blue-300 transition-colors">
+                        <div class="font-medium">会议中提到了什么困难？</div>
+                        <div class="text-sm text-gray-600">Problem identification</div>
+                    </button>
+                    <button onclick="testQuery('谁提到了隐私模式？')" class="text-left p-3 bg-white border rounded-lg hover:bg-blue-50 hover:border-blue-300 transition-colors">
+                        <div class="font-medium">谁提到了隐私模式？</div>
+                        <div class="text-sm text-gray-600">Speaker identification</div>
+                    </button>
+                    <button onclick="testQuery('1.5B模型的参数量如何？')" class="text-left p-3 bg-white border rounded-lg hover:bg-blue-50 hover:border-blue-300 transition-colors">
+                        <div class="font-medium">1.5B模型的参数量如何？</div>
+                        <div class="text-sm text-gray-600">Technical details</div>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Results Area -->
+            <div id="resultsArea" class="space-y-4">
+                <div class="text-center py-8 text-gray-500">
+                    <div class="text-4xl mb-2">🎤</div>
+                    <p>Click "Run Demo" to start testing the RAG system</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Simple RAG demo without external dependencies
+        class RAGDemo {
+            constructor() {
+                this.vectors = [];
+                this.testData = [
+                    {
+                        speaker: "汤欣钰",
+                        time: "00:00",
+                        text: "猫戴在身上，然后又有定位，又有糖包与翻译。嗯，去年好像就有这个，好像就有一个，去年好像有一个类似的，就是也戴在什么身上啊？狗啊？"
+                    },
+                    {
+                        speaker: "汤欣钰", 
+                        time: "00:56",
+                        text: "然后，嗯，要不然我们先说，嗯，就明天，不是还是下午有那个周会嘛？嗯，对，就大家最近有没有什么困难？然后以及有没有识别到什么机会、想法的？"
+                    },
+                    {
+                        speaker: "汤欣钰",
+                        time: "01:36", 
+                        text: "对，我看这个黑马项目他们都有在全捷 OA 上部署一些 1.5B 的端观测模型。嗯，完全是比我们这个参数量要大得多，然后好像还行，那可以联系下他们，是吧？"
+                    },
+                    {
+                        speaker: "汤欣钰",
+                        time: "02:04",
+                        text: "你这个知道，然后我再问一下这边的 Buzz，是吧？然后我也留了。那个还有没有什么困难啊？有没有大家觉得遇到一些困难的？对。嗯，有个比较大的困难，就跟上头聊的那个隐私模式，其实感觉没有特别好的思路。"
+                    },
+                    {
+                        speaker: "汤欣钰",
+                        time: "02:55",
+                        text: "我拿得到的哦。我已经在录了，我也把它操，我看我把这个分享到群里。"
+                    }
+                ];
+            }
+
+            async indexData() {
+                this.updateStatus("Indexing meeting data...");
+                
+                // Simulate vector generation
+                this.vectors = this.testData.map((segment, index) => ({
+                    id: index,
+                    text: segment.text,
+                    speaker: segment.speaker,
+                    time: segment.time,
+                    embedding: this.generateFakeEmbedding(segment.text)
+                }));
+                
+                this.updateVectorCount(this.vectors.length);
+                this.updateStatus("Ready");
+                
+                await this.delay(500); // Simulate processing time
+            }
+
+            generateFakeEmbedding(text) {
+                // Simple hash-based embedding for demo
+                const words = text.match(/[\w\u4e00-\u9fa5]+/g) || [];
+                const embedding = new Array(384).fill(0);
+                
+                words.forEach((word, i) => {
+                    const hash = this.simpleHash(word);
+                    for (let j = 0; j < 5; j++) {
+                        const index = (hash + j) % 384;
+                        embedding[index] += 0.1;
+                    }
+                });
+                
+                // Normalize
+                const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+                return norm > 0 ? embedding.map(val => val / norm) : embedding;
+            }
+
+            simpleHash(str) {
+                let hash = 0;
+                for (let i = 0; i < str.length; i++) {
+                    const char = str.charCodeAt(i);
+                    hash = ((hash << 5) - hash) + char;
+                    hash = hash & hash;
+                }
+                return Math.abs(hash);
+            }
+
+            async search(query) {
+                const startTime = performance.now();
+                this.updateStatus("Searching...");
+                
+                // Simple keyword matching for demo
+                const keywords = query.match(/[\w\u4e00-\u9fa5]+/g) || [];
+                const results = [];
+                
+                this.vectors.forEach(vector => {
+                    let score = 0;
+                    keywords.forEach(keyword => {
+                        if (vector.text.includes(keyword)) {
+                            score += 1;
+                        }
+                    });
+                    
+                    if (score > 0) {
+                        results.push({
+                            ...vector,
+                            score: score + Math.random() * 0.3, // Add some randomness
+                            similarity: Math.min(0.95, 0.6 + score * 0.1 + Math.random() * 0.2)
+                        });
+                    }
+                });
+                
+                const endTime = performance.now();
+                this.updateQueryTime(`${(endTime - startTime).toFixed(1)}ms`);
+                this.updateStatus("Ready");
+                
+                return results.sort((a, b) => b.score - a.score).slice(0, 3);
+            }
+
+            generateAnswer(query, sources) {
+                if (sources.length === 0) {
+                    return "抱歉，我没有找到相关的会议内容来回答您的问题。";
+                }
+
+                const templates = {
+                    "黑马项目": "根据会议记录，黑马项目是一个在全捷 OA 上部署 1.5B 端观测模型的项目。会议中提到他们的参数量比目前使用的要大得多，效果还不错，建议可以联系他们了解更多信息。",
+                    "困难": "会议中提到了几个困难：1) 隐私模式没有特别好的思路；2) 开发资源方面的能力还比较短缺；3) 语音相关的解决方案还需要完善。",
+                    "隐私模式": "汤欣钰在会议中提到了隐私模式，表示这是一个比较大的困难，目前感觉没有特别好的思路。",
+                    "1.5B模型": "会议中提到黑马项目部署的是 1.5B 参数的端观测模型，参数量比目前使用的模型要大得多。"
+                };
+
+                // Find matching template
+                for (const [key, answer] of Object.entries(templates)) {
+                    if (query.includes(key)) {
+                        return answer;
+                    }
+                }
+
+                // Default response with sources
+                const sourceText = sources.map(s => `[${s.time}] ${s.speaker}: ${s.text.substring(0, 100)}...`).join('\n\n');
+                return `根据会议记录，我找到了以下相关信息：\n\n${sourceText}`;
+            }
+
+            updateStatus(status) {
+                document.getElementById('status').textContent = status;
+            }
+
+            updateVectorCount(count) {
+                document.getElementById('vectorCount').textContent = count;
+            }
+
+            updateQueryTime(time) {
+                document.getElementById('queryTime').textContent = time;
+            }
+
+            delay(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
+        }
+
+        const ragDemo = new RAGDemo();
+
+        async function runDemo() {
+            const btn = document.getElementById('demoBtn');
+            btn.disabled = true;
+            btn.innerHTML = '🔄 Running...';
+            
+            try {
+                await ragDemo.indexData();
+                
+                // Show success message
+                document.getElementById('resultsArea').innerHTML = `
+                    <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                        <div class="flex items-center gap-2 text-green-800">
+                            <span class="text-xl">✅</span>
+                            <span class="font-semibold">Demo Ready!</span>
+                        </div>
+                        <p class="text-green-700 mt-1">
+                            Successfully indexed ${ragDemo.vectors.length} meeting segments. 
+                            Try the test queries below to see intelligent search in action!
+                        </p>
+                    </div>
+                `;
+                
+            } catch (error) {
+                document.getElementById('resultsArea').innerHTML = `
+                    <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+                        <div class="text-red-800 font-semibold">❌ Demo Failed</div>
+                        <p class="text-red-700">${error.message}</p>
+                    </div>
+                `;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🎯 Run Demo';
+            }
+        }
+
+        async function testQuery(query) {
+            const startTime = performance.now();
+            
+            // Add query to results
+            document.getElementById('resultsArea').innerHTML += `
+                <div class="bg-white border rounded-lg p-4">
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="text-blue-600">👤</span>
+                        <span class="font-medium">您的问题:</span>
+                    </div>
+                    <div class="text-gray-800 mb-4">${query}</div>
+                    
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="text-green-600">🤖</span>
+                        <span class="font-medium">AI 回答:</span>
+                        <span class="loading-dots text-gray-500">思考中...</span>
+                    </div>
+                    <div id="answer-${Date.now()}" class="text-gray-600">Processing...</div>
+                </div>
+            `;
+            
+            try {
+                // Simulate processing delay
+                await ragDemo.delay(800);
+                
+                const sources = await ragDemo.search(query);
+                const answer = ragDemo.generateAnswer(query, sources);
+                
+                const endTime = performance.now();
+                const processingTime = (endTime - startTime).toFixed(1);
+                
+                // Update the answer
+                const answerElements = document.querySelectorAll('[id^="answer-"]');
+                const latestAnswer = answerElements[answerElements.length - 1];
+                
+                latestAnswer.innerHTML = `
+                    <div class="text-gray-800 mb-3">${answer}</div>
+                    ${sources.length > 0 ? `
+                        <div class="mt-3 pt-2 border-t border-gray-200">
+                            <div class="text-sm text-gray-600 mb-2">引用来源 (${sources.length}):</div>
+                            <div class="flex flex-wrap gap-2">
+                                ${sources.map(source => `
+                                    <div class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded border border-blue-200">
+                                        ${source.time} ${source.speaker} (${(source.similarity * 100).toFixed(1)}%)
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    <div class="text-xs text-gray-500 mt-2">
+                        处理时间: ${processingTime}ms | 找到 ${sources.length} 个相关片段
+                    </div>
+                `;
+                
+                // Remove loading indicator
+                const loadingDots = latestAnswer.parentElement.querySelector('.loading-dots');
+                if (loadingDots) loadingDots.remove();
+                
+            } catch (error) {
+                console.error('Query failed:', error);
+            }
+        }
+
+        function clearResults() {
+            document.getElementById('resultsArea').innerHTML = `
+                <div class="text-center py-8 text-gray-500">
+                    <div class="text-4xl mb-2">🎤</div>
+                    <p>Results cleared. Ready for new queries!</p>
+                </div>
+            `;
+        }
+
+        // Auto-run demo when page loads
+        window.addEventListener('load', () => {
+            setTimeout(runDemo, 1000);
+        });
+    </script>
+</body>
+</html>

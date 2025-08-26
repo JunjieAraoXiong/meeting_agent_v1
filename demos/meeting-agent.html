@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meeting Agent - Feishu Text-Only</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // Utilities
+        function pad2(n) { return n < 10 ? `0${n}` : String(n); }
+        
+        function fmtTime(s) {
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const sec = Math.floor(s % 60);
+            return h > 0 ? `${h}:${pad2(m)}:${pad2(sec)}` : `${m}:${pad2(sec)}`;
+        }
+
+        function parseTimeToSeconds(str) {
+            const parts = str.split(':');
+            const minutes = parseInt(parts[0], 10);
+            const seconds = parseInt(parts[1], 10);
+            return minutes * 60 + seconds;
+        }
+
+        function parseTranscript(raw) {
+            const lines = raw.split(/\r?\n/).map((l) => l.trim());
+            const segs = [];
+            const feishuSpeakerPattern = /^(.+?)\s+(\d{1,2}:\d{2})$/;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (!line) continue;
+
+                const feishuMatch = line.match(feishuSpeakerPattern);
+                if (feishuMatch) {
+                    const speaker = feishuMatch[1].trim();
+                    const timestampStr = feishuMatch[2];
+                    const t = parseTimeToSeconds(timestampStr);
+                    
+                    let text = "";
+                    let j = i + 1;
+                    while (j < lines.length && lines[j] && !lines[j].match(feishuSpeakerPattern)) {
+                        if (text) text += " ";
+                        text += lines[j].trim();
+                        j++;
+                    }
+                    
+                    if (text) {
+                        segs.push({ idx: segs.length, t, speaker, text });
+                    }
+                    i = j - 1;
+                }
+            }
+
+            // Ensure strictly increasing time
+            for (let i = 1; i < segs.length; i++) {
+                if (segs[i].t <= segs[i - 1].t) segs[i].t = segs[i - 1].t + 1;
+            }
+            return segs;
+        }
+
+        function extractTerms(segments) {
+            const map = new Map();
+            
+            const addOcc = (term, idx, context) => {
+                const key = term.trim();
+                if (!key) return;
+                const curr = map.get(key);
+                if (curr) {
+                    curr.count += 1;
+                    curr.occurrences.push(idx);
+                } else {
+                    map.set(key, { term: key, count: 1, firstIdx: idx, occurrences: [idx], contexts: [context] });
+                }
+            };
+
+            const techNumberRe = /(\d+\.?\d*[BM]?)\s*(模型|参数|版本)/g;
+            const chineseCompoundRe = /([\u4e00-\u9fa5]{2,4})(项目|模型|模式|系统|平台|算法|方案|产品|设备|眼镜|手环|录音)/g;
+            const brandRe = /\b(Meta|Google|谷歌|苹果|小米|雷朋|Buzz|Take\s+Note|OA)\b/gi;
+
+            segments.forEach((seg) => {
+                const { text, idx } = seg;
+                let m;
+                while ((m = techNumberRe.exec(text))) addOcc(m[0], idx, text);
+                while ((m = chineseCompoundRe.exec(text))) addOcc(m[0], idx, text);
+                while ((m = brandRe.exec(text))) addOcc(m[0], idx, text);
+
+                const cjkRe = /([\u4e00-\u9fa5]{2,6})/g;
+                const seen = new Set();
+                while ((m = cjkRe.exec(text))) {
+                    const term = m[1];
+                    if (seen.has(term)) continue;
+                    seen.add(term);
+                    if (!/^(这个|那个|就是|然后|但是|如果|所以|因为|可能|应该|需要|觉得|知道|看到|听到|说的|做的|用的|有的|没有|不是|是的|对的|好的|行的)$/i.test(term)) {
+                        addOcc(term, idx, text);
+                    }
+                }
+            });
+
+            for (const [k, v] of Array.from(map.entries())) {
+                const looksImportant = 
+                    /\d+\.?\d*[BM]/.test(k) ||
+                    /(项目|模型|模式|系统|平台|算法|方案|产品|设备|眼镜|手环|录音)$/.test(k) ||
+                    /^(Meta|Google|谷歌|苹果|小米|雷朋|Buzz|Take|Note|OA)$/i.test(k);
+                if (v.count < 2 && !looksImportant) map.delete(k);
+            }
+            return map;
+        }
+
+        function escapeHtml(s) {
+            return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        function highlightTerms(text, terms, active) {
+            if (!text || !terms || terms.length === 0) return escapeHtml(text);
+            
+            const sorted = [...new Set(terms)].sort((a, b) => b.length - a.length);
+            const pattern = new RegExp(`(${sorted.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+            const lowerSet = new Set(sorted.map(t => t.toLowerCase()));
+            const activeLower = active ? active.toLowerCase() : null;
+
+            const parts = text.split(pattern);
+            return parts.map((part) => {
+                if (lowerSet.has(part.toLowerCase())) {
+                    const isActive = activeLower && part.toLowerCase() === activeLower;
+                    const cls = isActive ? "bg-yellow-300" : "bg-yellow-100";
+                    return `<mark class="px-1 rounded cursor-pointer ${cls}" onclick="setActiveTerm('${part}')">${escapeHtml(part)}</mark>`;
+                }
+                return escapeHtml(part);
+            }).join("");
+        }
+
+        const SAMPLE = \`汤欣钰 00:00
+猫戴在身上，然后又有定位，又有糖包与翻译。嗯，去年好像就有这个，好像就有一个，去年好像有一个类似的，就是也戴在什么身上啊？狗啊？对啊，那个网站的哪里啊？那个有没有总的那个 list？如果单独发一个，OK，我来发一个这种的 list，先，这个先到，我发也行，张老师不用发。
+
+汤欣钰 00:56
+然后，嗯，要不然我们先说，嗯，就明天，不是还是下午有那个周会嘛？嗯，对，就大家最近有没有什么困难？然后以及有没有识别到什么机会、想法的？然后其他的就是例行的，比如在会上就例行同步了。主要是我觉得大会前没有什么要决策的。对，一个是那个我知道的，一个是志旭那边，对吧？他手机测这个开发的资源，或者说这种能力我们还比较短缺一些，是吧？行，这个是已经知道了。
+
+汤欣钰 01:36
+对，我看这个黑马项目他们都有在全捷 OA 上部署一些 1.5B 的端观测模型。嗯，完全是比我们这个参数量要大得多，然后好像还行，那可以联系下他们，是吧？反正就是那个黑马，这个马拉松上，对，我觉得可能那些人也很重要，看哪些人有意思，然后跟他们聊一聊。
+
+汤欣钰 02:04
+你这个知道，然后我再问一下这边的 Buzz，是吧？然后我也留了。那个还有没有什么困难啊？有没有大家觉得遇到一些困难的？对。嗯，有个比较大的困难，就跟上头聊的那个隐私模式，其实感觉没有特别好的思路。嗯，但是我又回归到那个眼镜问题，因为之前谷歌他们不是也遇到很难解释的问题嘛？嗯，然后回顾了一下雷朋的解法，那个 Meta 的解法，但是到咱们这块，语音相关的那个人还没有特别好的一个。行，这个待会我们再说。行，这个同学大概知道了。\`;
+
+        // Global function for onclick
+        window.setActiveTerm = (term) => {
+            window.currentActiveTerm = term;
+            document.querySelector('#active-term').textContent = term;
+            document.querySelector('#term-definition').textContent = \`定义: \${term} - 这是一个在会议中提到的重要术语。\`;
+        };
+
+        function MeetingAgent() {
+            const [raw, setRaw] = useState(SAMPLE.trim());
+            const [segments, setSegments] = useState(() => parseTranscript(SAMPLE));
+            const [play, setPlay] = useState(false);
+            const [playhead, setPlayhead] = useState(0);
+            const [activeIdx, setActiveIdx] = useState(-1);
+            const [showPaste, setShowPaste] = useState(false);
+            const [pasteDraft, setPasteDraft] = useState("");
+
+            const maxT = segments.length ? segments[segments.length - 1].t + 20 : 0;
+            const termMap = useMemo(() => extractTerms(segments), [segments]);
+
+            const introducedTerms = useMemo(() => {
+                const set = new Set();
+                for (const [term, info] of termMap.entries()) {
+                    if (info.firstIdx <= activeIdx) set.add(term);
+                }
+                const arr = Array.from(set);
+                return arr.length > 0 ? arr : Array.from(termMap.keys());
+            }, [termMap, activeIdx]);
+
+            useEffect(() => {
+                if (!play) return;
+                const id = setInterval(() => {
+                    setPlayhead((t) => Math.min(t + 1, maxT));
+                }, 1000);
+                return () => clearInterval(id);
+            }, [play, maxT]);
+
+            useEffect(() => {
+                let idx = -1;
+                for (let i = 0; i < segments.length; i++) {
+                    if (segments[i].t <= playhead) idx = i; else break;
+                }
+                setActiveIdx(idx);
+            }, [playhead, segments]);
+
+            useEffect(() => {
+                const segs = parseTranscript(raw);
+                setSegments(segs);
+                setPlayhead(0);
+                setActiveIdx(-1);
+            }, [raw]);
+
+            function renderSegment(seg) {
+                const html = highlightTerms(seg.text, introducedTerms, window.currentActiveTerm);
+                const isRevealed = seg.idx <= activeIdx;
+                return (
+                    <div key={seg.idx} className={\`rounded-xl px-3 py-2 my-1 border \${isRevealed ? "bg-white" : "bg-gray-50 opacity-60"}\`}>
+                        <div className="text-xs text-gray-500 flex items-center gap-2">
+                            <span className="font-mono">{fmtTime(seg.t)}</span>
+                            {seg.speaker && <span className="px-2 py-0.5 bg-gray-100 rounded-full">{seg.speaker}</span>}
+                        </div>
+                        <div className="mt-1 leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
+                    </div>
+                );
+            }
+
+            return (
+                <div className="w-full min-h-screen bg-neutral-50 p-4">
+                    <div className="max-w-7xl mx-auto mb-4">
+                        <h1 className="text-2xl font-semibold mb-4">🎯 Feishu Meeting Agent - Local Demo</h1>
+                        <div className="flex items-center gap-2 mb-3">
+                            <button 
+                                className="text-sm px-3 py-2 bg-amber-50 border rounded-xl hover:shadow"
+                                onClick={() => { setPasteDraft(""); setShowPaste(true); }}
+                            >
+                                📋 Paste Transcript
+                            </button>
+                            <button 
+                                className="text-sm px-3 py-2 bg-white border rounded-xl hover:shadow"
+                                onClick={() => setRaw(SAMPLE.trim())}
+                            >
+                                🔄 Load Sample
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        <div className="lg:col-span-2">
+                            <div className="bg-white rounded-2xl shadow-sm border p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-sm font-medium">⏱️ Simulated Timeline</span>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            className={\`px-3 py-1.5 rounded-xl text-sm border \${play ? "bg-red-50" : "bg-green-50"}\`}
+                                            onClick={() => setPlay(p => !p)}
+                                        >
+                                            {play ? "⏸️ Pause" : "▶️ Play"}
+                                        </button>
+                                        <button 
+                                            className="px-3 py-1.5 rounded-xl text-sm border"
+                                            onClick={() => { setPlay(false); setPlayhead(0); }}
+                                        >
+                                            🔄 Reset
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="flex items-center gap-3">
+                                    <span className="text-xs font-mono text-gray-500 w-12">{fmtTime(playhead)}</span>
+                                    <input 
+                                        type="range" 
+                                        min={0} 
+                                        max={Math.max(maxT, 1)} 
+                                        value={playhead} 
+                                        onChange={(e) => setPlayhead(parseInt(e.target.value, 10))}
+                                        className="w-full"
+                                    />
+                                    <span className="text-xs font-mono text-gray-500 w-12 text-right">{fmtTime(maxT)}</span>
+                                </div>
+
+                                <div className="mt-3 h-[72vh] overflow-auto pr-1 custom-scrollbar">
+                                    {segments.map(seg => renderSegment(seg))}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="lg:col-span-1">
+                            <div className="bg-white rounded-2xl shadow-sm border p-3">
+                                <div className="text-sm font-medium mb-3">📖 Smart Definitions</div>
+                                <div id="active-term" className="text-sm font-semibold text-blue-600 mb-2">点击左侧高亮术语查看定义</div>
+                                <div id="term-definition" className="text-sm text-gray-600 mb-4">选择一个术语以查看其定义和上下文。</div>
+                                
+                                <div className="text-xs text-gray-500 mb-2">Detected Terms:</div>
+                                <div className="flex flex-wrap gap-1">
+                                    {Array.from(termMap.keys()).slice(0, 10).map(term => (
+                                        <button 
+                                            key={term}
+                                            className="text-xs px-2 py-1 border rounded-full hover:bg-gray-50"
+                                            onClick={() => window.setActiveTerm(term)}
+                                        >
+                                            {term}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {showPaste && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center">
+                            <div className="absolute inset-0 bg-black/40" onClick={() => setShowPaste(false)} />
+                            <div className="relative z-10 w-full max-w-2xl bg-white border rounded-2xl shadow-lg p-4">
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="text-sm font-medium">📋 Paste Transcript</div>
+                                    <button 
+                                        className="text-xs px-2 py-1 border rounded-lg hover:bg-gray-50"
+                                        onClick={() => setShowPaste(false)}
+                                    >
+                                        ✕ Close
+                                    </button>
+                                </div>
+                                <textarea 
+                                    className="w-full h-60 border rounded-xl p-3 font-mono text-xs bg-neutral-50"
+                                    placeholder={\`在此粘贴 Feishu 转录文本...
+
+格式:
+汤欣钰 00:00
+文本内容...
+
+说话人 1 01:30
+更多内容...\`}
+                                    value={pasteDraft}
+                                    onChange={(e) => setPasteDraft(e.target.value)}
+                                />
+                                <div className="mt-3 flex items-center justify-end gap-2">
+                                    <button 
+                                        className="text-sm px-3 py-2 bg-white border rounded-xl hover:shadow"
+                                        onClick={() => setShowPaste(false)}
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button 
+                                        className="text-sm px-3 py-2 bg-amber-50 border rounded-xl hover:shadow"
+                                        onClick={() => { 
+                                            if (pasteDraft.trim().length) setRaw(pasteDraft.trim()); 
+                                            setShowPaste(false); 
+                                        }}
+                                    >
+                                        ✅ Load Transcript
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.render(<MeetingAgent />, document.getElementById('root'));
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meeting Agent - Simple Version</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .transcript-item { transition: opacity 0.3s ease; }
+        .revealed { opacity: 1; background: white; }
+        .hidden { opacity: 0.4; background: #f9f9f9; }
+        .highlight { background: #fef3c7; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
+        .highlight:hover { background: #fde047; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="container mx-auto p-4">
+        <h1 class="text-2xl font-bold mb-4">🎯 Feishu Meeting Agent - Simple Demo</h1>
+        
+        <!-- Controls -->
+        <div class="bg-white rounded-lg shadow p-4 mb-4">
+            <div class="flex gap-2 mb-4">
+                <button id="playBtn" class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600">▶️ Play</button>
+                <button id="resetBtn" class="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600">🔄 Reset</button>
+                <button id="pasteBtn" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">📋 Paste</button>
+            </div>
+            
+            <!-- Timeline -->
+            <div class="flex items-center gap-2 mb-2">
+                <span id="currentTime" class="text-sm font-mono w-12">0:00</span>
+                <input type="range" id="timeline" min="0" max="300" value="0" class="flex-1">
+                <span id="maxTime" class="text-sm font-mono w-12">5:00</span>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <!-- Left: Transcript -->
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h2 class="text-lg font-semibold mb-3">📜 Meeting Transcript</h2>
+                    <div id="transcript" class="space-y-2 max-h-96 overflow-y-auto">
+                        <!-- Transcript items will be inserted here -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Right: Terms -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h2 class="text-lg font-semibold mb-3">📖 Key Terms</h2>
+                    <div id="activeTerm" class="text-blue-600 font-semibold mb-2">Click a highlighted term</div>
+                    <div id="termDefinition" class="text-gray-600 text-sm mb-4">Terms will appear as the meeting progresses.</div>
+                    <div id="termsList" class="flex flex-wrap gap-1">
+                        <!-- Terms will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Paste Modal -->
+    <div id="pasteModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-lg p-6 w-full max-w-2xl m-4">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold">📋 Paste Your Transcript</h3>
+                <button id="closeModal" class="text-gray-500 hover:text-gray-700">✕</button>
+            </div>
+            <textarea id="pasteArea" class="w-full h-64 border rounded p-3 font-mono text-sm" 
+                placeholder="Paste your Feishu transcript here...
+
+Format:
+汤欣钰 00:00
+Content here...
+
+说话人 1 01:30
+More content..."></textarea>
+            <div class="flex justify-end gap-2 mt-4">
+                <button id="cancelPaste" class="px-4 py-2 bg-gray-300 rounded hover:bg-gray-400">Cancel</button>
+                <button id="loadTranscript" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">Load</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Sample data
+        const SAMPLE_TRANSCRIPT = `汤欣钰 00:00
+猫戴在身上，然后又有定位，又有糖包与翻译。嗯，去年好像就有这个，好像就有一个，去年好像有一个类似的，就是也戴在什么身上啊？狗啊？对啊，那个网站的哪里啊？那个有没有总的那个 list？如果单独发一个，OK，我来发一个这种的 list，先，这个先到，我发也行，张老师不用发。
+
+汤欣钰 00:56
+然后，嗯，要不然我们先说，嗯，就明天，不是还是下午有那个周会嘛？嗯，对，就大家最近有没有什么困难？然后以及有没有识别到什么机会、想法的？然后其他的就是例行的，比如在会上就例行同步了。主要是我觉得大会前没有什么要决策的。对，一个是那个我知道的，一个是志旭那边，对吧？他手机测这个开发的资源，或者说这种能力我们还比较短缺一些，是吧？行，这个是已经知道了。
+
+汤欣钰 01:36
+对，我看这个黑马项目他们都有在全捷 OA 上部署一些 1.5B 的端观测模型。嗯，完全是比我们这个参数量要大得多，然后好像还行，那可以联系下他们，是吧？反正就是那个黑马，这个马拉松上，对，我觉得可能那些人也很重要，看哪些人有意思，然后跟他们聊一聊。
+
+汤欣钰 02:04
+你这个知道，然后我再问一下这边的 Buzz，是吧？然后我也留了。那个还有没有什么困难啊？有没有大家觉得遇到一些困难的？对。嗯，有个比较大的困难，就跟上头聊的那个隐私模式，其实感觉没有特别好的思路。嗯，但是我又回归到那个眼镜问题，因为之前谷歌他们不是也遇到很难解释的问题嘛？嗯，然后回顾了一下雷朋的解法，那个 Meta 的解法，但是到咱们这块，语音相关的那个人还没有特别好的一个。行，这个待会我们再说。行，这个同学大概知道了。`;
+
+        // State
+        let segments = [];
+        let currentIndex = 0;
+        let isPlaying = false;
+        let interval;
+        let terms = new Set();
+
+        // Parse transcript
+        function parseTranscript(text) {
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+            const segs = [];
+            const speakerPattern = /^(.+?)\s+(\d{1,2}:\d{2})$/;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const match = line.match(speakerPattern);
+                
+                if (match) {
+                    const speaker = match[1];
+                    const time = match[2];
+                    const timeSeconds = parseTime(time);
+                    
+                    // Collect content until next speaker
+                    let content = '';
+                    let j = i + 1;
+                    while (j < lines.length && !lines[j].match(speakerPattern)) {
+                        if (content) content += ' ';
+                        content += lines[j];
+                        j++;
+                    }
+                    
+                    if (content) {
+                        segs.push({
+                            speaker,
+                            time,
+                            timeSeconds,
+                            content,
+                            index: segs.length
+                        });
+                    }
+                    i = j - 1;
+                }
+            }
+            return segs;
+        }
+
+        function parseTime(timeStr) {
+            const [min, sec] = timeStr.split(':').map(Number);
+            return min * 60 + sec;
+        }
+
+        function formatTime(seconds) {
+            const min = Math.floor(seconds / 60);
+            const sec = seconds % 60;
+            return `${min}:${sec.toString().padStart(2, '0')}`;
+        }
+
+        // Extract terms
+        function extractTerms(segments) {
+            const termSet = new Set();
+            segments.forEach(seg => {
+                // Chinese compound terms
+                const matches = seg.content.match(/([\u4e00-\u9fa5]{2,4})(项目|模型|模式|系统|平台|算法|方案|产品|设备|眼镜|手环|录音)/g);
+                if (matches) {
+                    matches.forEach(term => termSet.add(term));
+                }
+                
+                // Technical terms
+                const techMatches = seg.content.match(/(\d+\.?\d*[BM]?)\s*(模型|参数|版本)/g);
+                if (techMatches) {
+                    techMatches.forEach(term => termSet.add(term));
+                }
+                
+                // Brand names
+                const brandMatches = seg.content.match(/\b(Meta|Google|谷歌|苹果|小米|雷朋|Buzz|OA)\b/gi);
+                if (brandMatches) {
+                    brandMatches.forEach(term => termSet.add(term));
+                }
+            });
+            return Array.from(termSet);
+        }
+
+        // Highlight terms in text
+        function highlightTerms(text, termsList) {
+            if (!termsList || termsList.length === 0) return text;
+            
+            let result = text;
+            termsList.forEach(term => {
+                const regex = new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                result = result.replace(regex, `<span class="highlight" onclick="selectTerm('$1')">$1</span>`);
+            });
+            return result;
+        }
+
+        // Render transcript
+        function renderTranscript() {
+            const container = document.getElementById('transcript');
+            container.innerHTML = '';
+            
+            segments.forEach((seg, index) => {
+                const div = document.createElement('div');
+                div.className = `transcript-item p-3 border rounded ${index <= currentIndex ? 'revealed' : 'hidden'}`;
+                
+                const highlightedContent = highlightTerms(seg.content, Array.from(terms));
+                
+                div.innerHTML = `
+                    <div class="text-xs text-gray-500 mb-1">
+                        <span class="font-mono">${seg.time}</span>
+                        <span class="ml-2 px-2 py-1 bg-gray-100 rounded">${seg.speaker}</span>
+                    </div>
+                    <div class="text-sm">${highlightedContent}</div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        // Render terms
+        function renderTerms() {
+            const container = document.getElementById('termsList');
+            container.innerHTML = '';
+            
+            Array.from(terms).forEach(term => {
+                const button = document.createElement('button');
+                button.className = 'text-xs px-2 py-1 bg-gray-100 rounded hover:bg-gray-200';
+                button.textContent = term;
+                button.onclick = () => selectTerm(term);
+                container.appendChild(button);
+            });
+        }
+
+        // Select term
+        function selectTerm(term) {
+            document.getElementById('activeTerm').textContent = term;
+            document.getElementById('termDefinition').textContent = `定义: ${term} - 这是会议中提到的重要术语。`;
+        }
+
+        // Play/pause
+        function togglePlay() {
+            const btn = document.getElementById('playBtn');
+            if (isPlaying) {
+                clearInterval(interval);
+                btn.textContent = '▶️ Play';
+                btn.className = 'px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600';
+            } else {
+                interval = setInterval(() => {
+                    if (currentIndex < segments.length - 1) {
+                        currentIndex++;
+                        renderTranscript();
+                        updateTimeline();
+                    } else {
+                        togglePlay();
+                    }
+                }, 2000); // 2 seconds per segment
+                btn.textContent = '⏸️ Pause';
+                btn.className = 'px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600';
+            }
+            isPlaying = !isPlaying;
+        }
+
+        // Reset
+        function reset() {
+            if (isPlaying) togglePlay();
+            currentIndex = -1;
+            renderTranscript();
+            updateTimeline();
+        }
+
+        // Update timeline
+        function updateTimeline() {
+            const timeline = document.getElementById('timeline');
+            const currentTime = document.getElementById('currentTime');
+            
+            if (segments.length > 0) {
+                const maxTime = segments[segments.length - 1].timeSeconds;
+                timeline.max = maxTime;
+                
+                if (currentIndex >= 0 && currentIndex < segments.length) {
+                    timeline.value = segments[currentIndex].timeSeconds;
+                    currentTime.textContent = formatTime(segments[currentIndex].timeSeconds);
+                } else {
+                    timeline.value = 0;
+                    currentTime.textContent = '0:00';
+                }
+                
+                document.getElementById('maxTime').textContent = formatTime(maxTime);
+            }
+        }
+
+        // Initialize
+        function init() {
+            console.log('Initializing meeting agent...');
+            
+            // Parse sample transcript
+            segments = parseTranscript(SAMPLE_TRANSCRIPT);
+            terms = new Set(extractTerms(segments));
+            
+            console.log('Parsed segments:', segments.length);
+            console.log('Extracted terms:', Array.from(terms));
+            
+            // Render
+            renderTranscript();
+            renderTerms();
+            updateTimeline();
+            
+            // Event listeners
+            document.getElementById('playBtn').onclick = togglePlay;
+            document.getElementById('resetBtn').onclick = reset;
+            document.getElementById('pasteBtn').onclick = () => {
+                document.getElementById('pasteModal').classList.remove('hidden');
+                document.getElementById('pasteModal').classList.add('flex');
+            };
+            
+            document.getElementById('closeModal').onclick = 
+            document.getElementById('cancelPaste').onclick = () => {
+                document.getElementById('pasteModal').classList.add('hidden');
+                document.getElementById('pasteModal').classList.remove('flex');
+            };
+            
+            document.getElementById('loadTranscript').onclick = () => {
+                const newText = document.getElementById('pasteArea').value;
+                if (newText.trim()) {
+                    segments = parseTranscript(newText);
+                    terms = new Set(extractTerms(segments));
+                    reset();
+                    renderTerms();
+                    console.log('Loaded new transcript:', segments.length, 'segments');
+                }
+                document.getElementById('pasteModal').classList.add('hidden');
+                document.getElementById('pasteModal').classList.remove('flex');
+            };
+            
+            document.getElementById('timeline').oninput = (e) => {
+                const targetTime = parseInt(e.target.value);
+                currentIndex = segments.findIndex(seg => seg.timeSeconds > targetTime) - 1;
+                if (currentIndex < 0) currentIndex = segments.length - 1;
+                renderTranscript();
+                document.getElementById('currentTime').textContent = formatTime(targetTime);
+            };
+        }
+
+        // Make selectTerm global for onclick
+        window.selectTerm = selectTerm;
+
+        // Start when page loads
+        document.addEventListener('DOMContentLoaded', init);
+        
+        console.log('Script loaded successfully');
+    </script>
+</body>
+</html>

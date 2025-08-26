@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Meeting Agent with File Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+        }
+        .file-tab {
+            transition: all 0.2s ease;
+            border-bottom: 2px solid transparent;
+        }
+        .file-tab.active {
+            border-bottom-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        .file-tab:hover {
+            background-color: #f3f4f6;
+        }
+        .editable {
+            background: transparent;
+            border: 1px solid transparent;
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+        .editable:hover {
+            border-color: #d1d5db;
+        }
+        .editable:focus {
+            outline: none;
+            border-color: #3b82f6;
+            background: white;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="container mx-auto p-4">
+        <h1 class="text-2xl font-bold mb-4">📊 Enhanced Meeting Agent with File Manager</h1>
+        
+        <!-- File Manager Section -->
+        <div class="bg-white rounded-lg shadow p-4 mb-4">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold">📁 File Manager</h2>
+                <div class="flex gap-2">
+                    <label for="fileInput" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 cursor-pointer">
+                        📁 Upload Files
+                    </label>
+                    <input type="file" id="fileInput" accept=".txt" multiple style="display: none;">
+                    <button id="refreshFiles" class="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600">🔄 Refresh</button>
+                </div>
+            </div>
+            
+            <!-- File List Table -->
+            <div class="overflow-x-auto">
+                <table class="w-full border-collapse border border-gray-300">
+                    <thead>
+                        <tr class="bg-gray-100">
+                            <th class="border border-gray-300 px-4 py-2 text-left">📄 File Name</th>
+                            <th class="border border-gray-300 px-4 py-2 text-left">📏 Size</th>
+                            <th class="border border-gray-300 px-4 py-2 text-left">📅 Date Created</th>
+                            <th class="border border-gray-300 px-4 py-2 text-left">👥 Participants</th>
+                            <th class="border border-gray-300 px-4 py-2 text-left">⏱️ Duration</th>
+                            <th class="border border-gray-300 px-4 py-2 text-left">🔧 Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fileList">
+                        <!-- Files will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- File Tabs -->
+        <div class="bg-white rounded-lg shadow mb-4">
+            <div class="flex overflow-x-auto border-b" id="fileTabs">
+                <!-- File tabs will be populated here -->
+            </div>
+        </div>
+
+        <!-- Current File Display -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold" id="currentFileName">Select a file to view</h2>
+                <div class="flex gap-2">
+                    <button id="analyzeBtn" class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600" disabled>🔍 Analyze</button>
+                    <button id="saveBtn" class="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600" disabled>💾 Save to History</button>
+                </div>
+            </div>
+            
+            <!-- File Content Preview -->
+            <div id="fileContent" class="bg-gray-50 p-4 rounded max-h-96 overflow-y-auto text-sm font-mono">
+                <p class="text-gray-500">Upload files to see content here...</p>
+            </div>
+            
+            <!-- Analysis Results -->
+            <div id="analysisResults" class="mt-4 hidden">
+                <h3 class="font-semibold mb-2">📊 Analysis Results:</h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <div class="bg-blue-50 p-3 rounded">
+                        <span class="text-gray-600">Segments:</span>
+                        <span id="segmentCount" class="font-mono font-bold">-</span>
+                    </div>
+                    <div class="bg-green-50 p-3 rounded">
+                        <span class="text-gray-600">Terms:</span>
+                        <span id="termCount" class="font-mono font-bold">-</span>
+                    </div>
+                    <div class="bg-yellow-50 p-3 rounded">
+                        <span class="text-gray-600">Parse Time:</span>
+                        <span id="parseTime" class="font-mono font-bold">-</span>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <span class="text-gray-600">Top Terms:</span>
+                    <div id="topTerms" class="flex flex-wrap gap-1 mt-1">
+                        <!-- Terms will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // File management system
+        let fileStorage = JSON.parse(localStorage.getItem('meetingFiles') || '[]');
+        let currentFile = null;
+
+        // Pre-populate with your existing files from transcriptions folder
+        const defaultFiles = [
+            {
+                id: 'file1',
+                name: '20250630.txt',
+                originalName: '20250630.txt',
+                size: 45692,
+                dateCreated: '2025-06-30',
+                transcriptionPath: '../transcriptions/20250630.txt',
+                content: '', // Will be loaded automatically
+                participants: ['汤欣钰'],
+                duration: '55:00',
+                segments: 0,
+                terms: 0,
+                fromTranscriptions: true
+            },
+            {
+                id: 'file2', 
+                name: '20250703.txt',
+                originalName: '20250703.txt',
+                size: 58432,
+                dateCreated: '2025-07-03',
+                transcriptionPath: '../transcriptions/20250703.txt',
+                content: '', // Will be loaded automatically
+                participants: ['说话人 1', '说话人 2', '说话人 3'],
+                duration: '01:13:47',
+                segments: 0,
+                terms: 0,
+                fromTranscriptions: true
+            }
+        ];
+
+        // Initialize with default files if storage is empty
+        if (fileStorage.length === 0) {
+            fileStorage = defaultFiles;
+            localStorage.setItem('meetingFiles', JSON.stringify(fileStorage));
+        }
+
+        // Utility functions
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function formatDate(dateStr) {
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('zh-CN') + ' ' + date.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'});
+        }
+
+        // Parse transcript function
+        function parseTranscript(text) {
+            const startTime = performance.now();
+            const lines = text.split('\\n').filter(line => line.trim());
+            const segments = [];
+            const terms = new Set();
+            
+            let currentSpeaker = '';
+            let currentTime = 0;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                
+                // Check for speaker + time pattern
+                const speakerMatch = line.match(/^(.+?)\\s+(\\d{1,2}:\\d{2})$/);
+                if (speakerMatch) {
+                    currentSpeaker = speakerMatch[1];
+                    currentTime = parseTime(speakerMatch[2]);
+                    continue;
+                }
+                
+                if (line && currentSpeaker) {
+                    segments.push({
+                        speaker: currentSpeaker,
+                        text: line,
+                        time: currentTime
+                    });
+                    
+                    // Extract terms
+                    const chineseTerms = line.match(/[\\u4e00-\\u9fa5]{2,4}/g) || [];
+                    const englishTerms = line.match(/[A-Z][A-Za-z]{2,}/g) || [];
+                    const acronyms = line.match(/\\b[A-Z]{2,5}\\b/g) || [];
+                    
+                    [...chineseTerms, ...englishTerms, ...acronyms].forEach(term => {
+                        if (!/^(这个|那个|就是|然后|但是|如果|所以|因为|可能|应该|需要)$/.test(term)) {
+                            terms.add(term);
+                        }
+                    });
+                    
+                    currentTime += 20; // Assume 20 seconds between segments
+                }
+            }
+            
+            const parseTime = (segments.length > 0) ? performance.now() - startTime : 0;
+            
+            return {
+                segments: segments.length,
+                terms: Array.from(terms).slice(0, 20),
+                parseTime: parseTime.toFixed(2)
+            };
+        }
+
+        function parseTime(timeStr) {
+            const parts = timeStr.split(':').map(Number);
+            if (parts.length === 2) return parts[0] * 60 + parts[1];
+            return 0;
+        }
+
+        // Render file list
+        function renderFileList() {
+            const tbody = document.getElementById('fileList');
+            tbody.innerHTML = fileStorage.map(file => `
+                <tr class="hover:bg-gray-50">
+                    <td class="border border-gray-300 px-4 py-2">
+                        <input type="text" value="\${file.name}" 
+                               class="editable w-full" 
+                               onchange="updateFileName('\${file.id}', this.value)"
+                               onblur="saveFileStorage()">
+                    </td>
+                    <td class="border border-gray-300 px-4 py-2 font-mono">\${formatFileSize(file.size)}</td>
+                    <td class="border border-gray-300 px-4 py-2 font-mono">\${formatDate(file.dateCreated)}</td>
+                    <td class="border border-gray-300 px-4 py-2">
+                        <div class="flex flex-wrap gap-1">
+                            \${file.participants.map(p => `<span class="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">\${p}</span>`).join('')}
+                        </div>
+                    </td>
+                    <td class="border border-gray-300 px-4 py-2 font-mono">\${file.duration}</td>
+                    <td class="border border-gray-300 px-4 py-2">
+                        <div class="flex gap-1">
+                            <button onclick="loadFile('\${file.id}')" 
+                                    class="px-2 py-1 bg-blue-500 text-white rounded text-xs hover:bg-blue-600">Open</button>
+                            <button onclick="deleteFile('\${file.id}')" 
+                                    class="px-2 py-1 bg-red-500 text-white rounded text-xs hover:bg-red-600">Delete</button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // Render file tabs
+        function renderFileTabs() {
+            const tabsContainer = document.getElementById('fileTabs');
+            tabsContainer.innerHTML = fileStorage.map(file => `
+                <button class="file-tab px-4 py-2 text-sm whitespace-nowrap \${currentFile?.id === file.id ? 'active' : ''}"
+                        onclick="loadFile('\${file.id}')">
+                    📄 \${file.name}
+                    \${currentFile?.id === file.id ? '<span class="ml-2 text-blue-600">●</span>' : ''}
+                </button>
+            `).join('');
+        }
+
+        // File operations
+        function updateFileName(fileId, newName) {
+            const file = fileStorage.find(f => f.id === fileId);
+            if (file) {
+                file.name = newName;
+                renderFileTabs();
+            }
+        }
+
+        function saveFileStorage() {
+            localStorage.setItem('meetingFiles', JSON.stringify(fileStorage));
+        }
+
+        async function loadFile(fileId) {
+            const file = fileStorage.find(f => f.id === fileId);
+            if (!file) return;
+            
+            currentFile = file;
+            document.getElementById('currentFileName').textContent = \`📄 \${file.name}\`;
+            
+            // Show loading content
+            document.getElementById('fileContent').innerHTML = '<p class="text-gray-500">Loading file content...</p>';
+            
+            try {
+                // Load from transcriptions folder if it's a transcription file
+                if (file.fromTranscriptions && file.transcriptionPath) {
+                    const response = await fetch(file.transcriptionPath);
+                    if (response.ok) {
+                        file.content = await response.text();
+                        document.getElementById('fileContent').innerHTML = \`<pre class="whitespace-pre-wrap">\${file.content}</pre>\`;
+                    } else {
+                        throw new Error(\`Failed to load \${file.transcriptionPath}\`);
+                    }
+                } else {
+                    // Use existing content or sample content for other files
+                    const sampleContent = file.content || (file.originalName === '20250630.txt' ? 
+                        \`汤欣钰 00:00
+猫戴在身上，然后又有定位，又有糖包与翻译。嗯，去年好像就有这个，好像就有一个，去年好像有一个类似的，就是也戴在什么身上啊？
+
+汤欣钰 00:56  
+然后，嗯，要不然我们先说，嗯，就明天，不是还是下午有那个周会嘛？嗯，对，就大家最近有没有什么困难？\` :
+                        \`说话人 1 00:01
+大部门的话一般也对齐到 7 月那种，月初其他的组织架构可能已经显示。昨天我也跟大家几个相关的聊了聊...
+
+说话人 1 01:42
+然后我们现在，比如一个是新知的跟踪或者获取的任务，还有日常的会议纪要也好...\`);
+                    
+                    file.content = sampleContent;
+                    document.getElementById('fileContent').innerHTML = \`<pre class="whitespace-pre-wrap">\${sampleContent}</pre>\`;
+                }
+                
+                // Enable buttons
+                document.getElementById('analyzeBtn').disabled = false;
+                document.getElementById('saveBtn').disabled = false;
+                
+                // Save updated content to storage
+                saveFileStorage();
+                renderFileTabs();
+                
+            } catch (error) {
+                console.error('Error loading file:', error);
+                document.getElementById('fileContent').innerHTML = \`
+                    <div class="text-red-600 p-4 bg-red-50 rounded">
+                        <h3 class="font-bold">Error Loading File</h3>
+                        <p>\${error.message}</p>
+                        <p class="text-sm mt-2">Make sure you're running this from a web server (not file://) to access transcription files.</p>
+                    </div>\`;
+            }
+        }
+
+        function deleteFile(fileId) {
+            if (confirm('Are you sure you want to delete this file?')) {
+                fileStorage = fileStorage.filter(f => f.id !== fileId);
+                saveFileStorage();
+                renderFileList();
+                renderFileTabs();
+                
+                if (currentFile?.id === fileId) {
+                    currentFile = null;
+                    document.getElementById('currentFileName').textContent = 'Select a file to view';
+                    document.getElementById('fileContent').innerHTML = '<p class="text-gray-500">Upload files to see content here...</p>';
+                    document.getElementById('analyzeBtn').disabled = true;
+                    document.getElementById('saveBtn').disabled = true;
+                    document.getElementById('analysisResults').classList.add('hidden');
+                }
+            }
+        }
+
+        function analyzeCurrentFile() {
+            if (!currentFile || !currentFile.content) return;
+            
+            const results = parseTranscript(currentFile.content);
+            
+            // Update file with analysis results
+            currentFile.segments = results.segments;
+            currentFile.terms = results.terms.length;
+            saveFileStorage();
+            
+            // Show results
+            document.getElementById('segmentCount').textContent = results.segments;
+            document.getElementById('termCount').textContent = results.terms.length;
+            document.getElementById('parseTime').textContent = results.parseTime + 'ms';
+            
+            const termsContainer = document.getElementById('topTerms');
+            termsContainer.innerHTML = results.terms.map(term => 
+                \`<span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs">\${term}</span>\`
+            ).join('');
+            
+            document.getElementById('analysisResults').classList.remove('hidden');
+            
+            // Update file list to show new stats
+            renderFileList();
+        }
+
+        // File upload handler
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const files = Array.from(e.target.files);
+            
+            files.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const newFile = {
+                        id: 'file_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+                        name: file.name,
+                        originalName: file.name,
+                        size: file.size,
+                        dateCreated: new Date().toISOString(),
+                        content: e.target.result,
+                        participants: [],
+                        duration: '00:00',
+                        segments: 0,
+                        terms: 0
+                    };
+                    
+                    // Quick analysis to extract participants
+                    const lines = newFile.content.split('\\n');
+                    const speakers = new Set();
+                    lines.forEach(line => {
+                        const match = line.match(/^(.+?)\\s+\\d{1,2}:\\d{2}$/);
+                        if (match) speakers.add(match[1]);
+                    });
+                    newFile.participants = Array.from(speakers);
+                    
+                    fileStorage.push(newFile);
+                    saveFileStorage();
+                    renderFileList();
+                    renderFileTabs();
+                };
+                reader.readAsText(file);
+            });
+        });
+
+        // Event listeners
+        document.getElementById('analyzeBtn').addEventListener('click', analyzeCurrentFile);
+        
+        document.getElementById('saveBtn').addEventListener('click', function() {
+            if (currentFile) {
+                alert(\`File "\${currentFile.name}" would be saved to history with \${currentFile.segments} segments and \${currentFile.terms} terms.\`);
+            }
+        });
+
+        document.getElementById('refreshFiles').addEventListener('click', function() {
+            renderFileList();
+            renderFileTabs();
+        });
+
+        // Initialize
+        renderFileList();
+        renderFileTabs();
+        
+        // Load first file by default
+        if (fileStorage.length > 0) {
+            loadFile(fileStorage[0].id);
+        }
+    </script>
+</body>
+</html>

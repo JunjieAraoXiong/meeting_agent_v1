@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>飞书会议助手 - Post-Meeting Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; 
+        }
+        .timeline-segment { 
+            transition: all 0.3s ease;
+            border-left: 4px solid transparent;
+        }
+        .revealed { 
+            opacity: 1; 
+            background: white; 
+            border-left-color: #3b82f6;
+        }
+        .hidden { 
+            opacity: 0.3; 
+            background: #f8fafc; 
+        }
+        .highlight { 
+            background: #fef3c7; 
+            padding: 2px 4px; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .highlight:hover { 
+            background: #fde047; 
+        }
+        .llm-keyword {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde047 100%);
+            border: 1px solid #f59e0b;
+            box-shadow: 0 1px 2px rgba(245, 158, 11, 0.2);
+        }
+        .llm-keyword:hover {
+            background: linear-gradient(135deg, #fde047 0%, #f59e0b 100%);
+            color: white;
+        }
+        .static-term {
+            background: #e5e7eb;
+            border: 1px solid #d1d5db;
+        }
+        .static-term:hover {
+            background: #d1d5db;
+        }
+        .chat-message {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .definition-card {
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            border: 1px solid #cbd5e1;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 h-screen overflow-hidden">
+    <div class="flex h-full">
+        <!-- Left Side: Timeline (Full Height) -->
+        <div class="w-2/3 flex flex-col h-full">
+            <!-- Header with Navigation -->
+            <div class="bg-white border-b p-4 flex justify-between items-center">
+                <div class="flex items-center gap-3">
+                    <h1 class="text-xl font-semibold text-gray-800">📝 会议时间线回放</h1>
+                    <span id="currentTranscriptInfo" class="text-sm text-gray-500 hidden bg-gray-100 px-2 py-1 rounded"></span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="showHistoryPage()" class="px-3 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors text-sm">
+                        📚 历史记录
+                    </button>
+                    <button onclick="showSettingsModal()" class="px-3 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm">
+                        ⚙️ 设置
+                    </button>
+                    <button onclick="showPasteModal()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                        📋 粘贴转录
+                    </button>
+                </div>
+            </div>
+
+            <!-- Timeline Controls -->
+            <div class="bg-white border-b p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-2">
+                        <button onclick="togglePlay()" id="playBtn" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors">
+                            ▶️ 播放
+                        </button>
+                        <button onclick="reset()" class="px-3 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors">
+                            🔄 重置
+                        </button>
+                        <span class="text-sm text-gray-600">自动播放间隔: 25秒</span>
+                        <span id="llmIndicator" class="hidden text-sm text-orange-600 flex items-center gap-1">
+                            <div class="animate-spin w-3 h-3 border border-orange-600 border-t-transparent rounded-full"></div>
+                            <span>AI 分析中...</span>
+                        </span>
+                    </div>
+                    <div class="text-sm text-gray-600">
+                        进度: <span id="progress">0/0</span> • AI关键词: <span id="keywordCount">0</span>
+                    </div>
+                </div>
+                
+                <!-- Timeline Scrubber -->
+                <div class="flex items-center gap-3">
+                    <span id="currentTime" class="text-sm font-mono text-gray-500 w-12">0:00</span>
+                    <input type="range" id="timeline" min="0" max="300" value="0" class="flex-1 h-2" oninput="seekTo(this.value)">
+                    <span id="maxTime" class="text-sm font-mono text-gray-500 w-12">5:00</span>
+                </div>
+            </div>
+
+            <!-- Transcript Timeline -->
+            <div id="transcriptContainer" class="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                <div id="transcript" class="space-y-3">
+                    <!-- Timeline segments will be inserted here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Side: Definitions + Chat -->
+        <div class="w-1/3 flex flex-col h-full border-l">
+            <!-- Top: Definitions -->
+            <div class="h-1/2 flex flex-col">
+                <div class="bg-white border-b p-4">
+                    <h2 class="text-lg font-semibold text-gray-800">📖 术语定义</h2>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                    <div id="definitionContent">
+                        <div class="text-sm text-gray-500 text-center py-8">
+                            点击左侧高亮术语查看定义
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom: Chat -->
+            <div class="h-1/2 flex flex-col border-t">
+                <div class="bg-white border-b p-4">
+                    <h2 class="text-lg font-semibold text-gray-800">💬 会议问答</h2>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                    <div id="chatMessages" class="space-y-3">
+                        <div class="text-sm text-gray-500 text-center py-4">
+                            询问关于本次会议的任何问题...
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white border-t p-4">
+                    <div class="flex gap-2">
+                        <input 
+                            type="text" 
+                            id="chatInput" 
+                            placeholder="问问关于这次会议..." 
+                            class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            onkeypress="if(event.key==='Enter') askQuestion()"
+                        >
+                        <button onclick="askQuestion()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                            发送
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Page -->
+    <div id="historyPage" class="fixed inset-0 bg-gray-100 z-40 hidden">
+        <div class="h-full flex flex-col">
+            <!-- History Header -->
+            <div class="bg-white border-b p-4">
+                <div class="flex justify-between items-center max-w-6xl mx-auto">
+                    <div class="flex items-center gap-3">
+                        <button onclick="showAgentPage()" class="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                            ← 返回助手
+                        </button>
+                        <h1 class="text-2xl font-bold text-gray-900">会议历史记录</h1>
+                        <span id="transcriptCount" class="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">0 个转录</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="loadAllTranscriptions()" class="px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm">
+                            🔄 刷新列表
+                        </button>
+                        <button onclick="showPasteModal()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                            📝 新增转录
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- History Content -->
+            <div class="flex-1 overflow-y-auto p-6">
+                <div class="max-w-6xl mx-auto">
+                    <div id="transcriptionsList" class="grid gap-4">
+                        <div class="text-center py-12 text-gray-500">
+                            <div class="text-4xl mb-4">📚</div>
+                            <p class="text-lg">正在加载会议历史...</p>
+                            <p class="text-sm mt-2">系统将自动检测并加载所有可用的转录文件</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Paste Modal -->
+    <div id="pasteModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-xl p-6 w-full max-w-3xl m-4 max-h-[80vh] flex flex-col">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-semibold">📋 粘贴飞书会议转录</h3>
+                <button onclick="closePasteModal()" class="text-gray-500 hover:text-gray-700 text-xl">✕</button>
+            </div>
+            <div class="mb-4">
+                <div class="text-sm text-gray-600 mb-2">支持的格式:</div>
+                <div class="bg-gray-50 rounded-lg p-3 text-sm font-mono text-gray-700">
+                    汤欣钰 00:00<br>
+                    会议内容...<br><br>
+                    说话人 1 01:30<br>
+                    更多内容...
+                </div>
+            </div>
+            <textarea 
+                id="pasteArea" 
+                class="flex-1 border rounded-lg p-4 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                placeholder="在此粘贴完整的飞书会议转录文本..."
+            ></textarea>
+            <div class="flex justify-end gap-3 mt-4">
+                <button onclick="closePasteModal()" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors">
+                    取消
+                </button>
+                <button onclick="loadTranscript()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                    加载转录
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-xl p-6 w-full max-w-md m-4">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-xl font-semibold">⚙️ AI 定义设置</h3>
+                <button onclick="closeSettingsModal()" class="text-gray-500 hover:text-gray-700 text-xl">✕</button>
+            </div>
+            
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Mify API Key</label>
+                    <input 
+                        type="password" 
+                        id="apiKeyInput" 
+                        placeholder="输入您的 Mify API Key"
+                        class="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                    <div class="text-xs text-gray-500 mt-1">
+                        API Key 将安全存储在浏览器本地，不会上传到服务器
+                    </div>
+                </div>
+                
+                <div class="bg-blue-50 rounded-lg p-3">
+                    <div class="text-sm text-blue-800">
+                        <strong>功能说明:</strong> 配置 API Key 后，点击术语将自动调用 AI 生成上下文相关的智能定义
+                    </div>
+                </div>
+                
+                <div id="apiStatus" class="hidden">
+                    <!-- API status will be shown here -->
+                </div>
+            </div>
+            
+            <div class="flex justify-end gap-3 mt-6">
+                <button onclick="clearApiKey()" class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm">
+                    清除 Key
+                </button>
+                <button onclick="testApiKey()" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm">
+                    测试连接
+                </button>
+                <button onclick="saveApiKey()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors">
+                    保存设置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Sample data
+        const sampleTranscript = \`汤欣钰 00:00
+猫戴在身上，然后又有定位，又有糖包与翻译。嗯，去年好像就有这个，好像就有一个，去年好像有一个类似的，就是也戴在什么身上啊？狗啊？对啊，那个网站的哪里啊？那个有没有总的那个 list？如果单独发一个，OK，我来发一个这种的 list，先，这个先到，我发也行，张老师不用发。
+
+汤欣钰 00:56
+然后，嗯，要不然我们先说，嗯，就明天，不是还是下午有那个周会嘛？嗯，对，就大家最近有没有什么困难？然后以及有没有识别到什么机会、想法的？然后其他的就是例行的，比如在会上就例行同步了。主要是我觉得大会前没有什么要决策的。对，一个是那个我知道的，一个是志旭那边，对吧？他手机测这个开发的资源，或者说这种能力我们还比较短缺一些，是吧？行，这个是已经知道了。
+
+汤欣钰 01:36
+对，我看这个黑马项目他们都有在全捷 OA 上部署一些 1.5B 的端观测模型。嗯，完全是比我们这个参数量要大得多，然后好像还行，那可以联系下他们，是吧？反正就是那个黑马，这个马拉松上，对，我觉得可能那些人也很重要，看哪些人有意思，然后跟他们聊一聊。
+
+汤欣钰 02:04
+你这个知道，然后我再问一下这边的 Buzz，是吧？然后我也留了。那个还有没有什么困难啊？有没有大家觉得遇到一些困难的？对。嗯，有个比较大的困难，就跟上头聊的那个隐私模式，其实感觉没有特别好的思路。嗯，但是我又回归到那个眼镜问题，因为之前谷歌他们不是也遇到很难解释的问题嘛？嗯，然后回顾了一下雷朋的解法，那个 Meta 的解法，但是到咱们这块，语音相关的那个人还没有特别好的一个。行，这个待会我们再说。行，这个同学大概知道了。
+
+汤欣钰 02:55
+我拿得到的哦。我已经在录了，我也把它操，我看我把这个分享到群里。\`;
+
+        // State
+        let segments = [];
+        let currentIndex = -1;
+        let isPlaying = false;
+        let playInterval;
+        let allTerms = new Map(); // term -> {count, occurrences, contexts}
+        let selectedTerm = null;
+        
+        // Real-time LLM keyword tracking
+        let llmKeywords = new Map(); // keyword -> {definition, segments, confidence}
+        let lastLLMCallIndex = -1; // Track when we last called LLM
+        let keywordCallInProgress = false;
+        
+        // Multi-transcription support
+        let allTranscriptions = new Map(); // filename -> {metadata, content, parsed}
+        let currentTranscriptionId = null;
+        let currentView = 'agent'; // 'agent' or 'history'
+
+        // Parse functions
+        function parseTime(timeStr) {
+            const [min, sec] = timeStr.split(':').map(Number);
+            return min * 60 + sec;
+        }
+
+        function formatTime(seconds) {
+            const min = Math.floor(seconds / 60);
+            const sec = seconds % 60;
+            return \`\${min}:\${sec.toString().padStart(2, '0')}\`;
+        }
+
+        function parseTranscript(text) {
+            const lines = text.split('\\n').filter(line => line.trim());
+            const result = [];
+            const speakerPattern = /^(.+?)\\s+(\\d{1,2}:\\d{2})$/;
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                const match = line.match(speakerPattern);
+                
+                if (match) {
+                    const speaker = match[1];
+                    const time = match[2];
+                    const timeSeconds = parseTime(time);
+                    
+                    let content = '';
+                    let j = i + 1;
+                    while (j < lines.length && !lines[j].match(speakerPattern)) {
+                        if (content) content += ' ';
+                        content += lines[j].trim();
+                        j++;
+                    }
+                    
+                    if (content) {
+                        result.push({ 
+                            speaker, 
+                            time, 
+                            timeSeconds, 
+                            content, 
+                            index: result.length 
+                        });
+                    }
+                    i = j - 1;
+                }
+            }
+            return result;
+        }
+
+        // Term extraction
+        function extractTerms(segments) {
+            const termMap = new Map();
+            
+            segments.forEach((seg, segIndex) => {
+                // Technical compound terms
+                const patterns = [
+                    /([\u4e00-\u9fa5]{2,4})(项目|模型|模式|系统|平台|算法|方案|产品|设备|眼镜|手环|录音)/g,
+                    /(\\d+\\.?\\d*[BM]?)\\s*(模型|参数|版本)/g,
+                    /\\b(Meta|Google|谷歌|苹果|小米|雷朋|Buzz|OA|Take\\s*Note)\\b/gi,
+                    /(人工智能|机器学习|深度学习|大模型|端侧|云端|隐私|安全|语音识别|自然语言|数据|算力)/g
+                ];
+                
+                patterns.forEach(pattern => {
+                    let match;
+                    const regex = new RegExp(pattern.source, pattern.flags);
+                    while ((match = regex.exec(seg.content)) !== null) {
+                        const term = match[0];
+                        if (termMap.has(term)) {
+                            const info = termMap.get(term);
+                            info.count++;
+                            info.occurrences.push(segIndex);
+                            if (info.contexts.length < 3) {
+                                info.contexts.push(seg.content.substring(0, 100) + '...');
+                            }
+                        } else {
+                            termMap.set(term, {
+                                term,
+                                count: 1,
+                                firstIndex: segIndex,
+                                occurrences: [segIndex],
+                                contexts: [seg.content.substring(0, 100) + '...']
+                            });
+                        }
+                    }
+                });
+            });
+            
+            // Filter terms (keep if appears more than once OR looks important)
+            for (const [term, info] of termMap.entries()) {
+                const looksImportant = 
+                    /\\d+\\.?\\d*[BM]/.test(term) || // Technical numbers
+                    /(项目|模型|模式|系统|平台|算法|方案|产品|设备)$/.test(term) || // Compound terms
+                    /^(Meta|Google|谷歌|苹果|小米|雷朋|Buzz|OA|Take\\s*Note)$/i.test(term); // Brands
+                
+                if (info.count < 2 && !looksImportant) {
+                    termMap.delete(term);
+                }
+            }
+            
+            return termMap;
+        }
+
+        // Real-time LLM keyword analysis
+        async function checkForLLMKeywordAnalysis() {
+            // Call LLM every ~1 minute (approximately 3 segments at 25s each)
+            const segmentsSinceLastCall = currentIndex - lastLLMCallIndex;
+            
+            if (segmentsSinceLastCall >= 3 && !keywordCallInProgress) {
+                await performLLMKeywordAnalysis();
+            }
+        }
+
+        async function performLLMKeywordAnalysis() {
+            if (keywordCallInProgress) return;
+            
+            const apiKey = localStorage.getItem('mify_api_key');
+            if (!apiKey) {
+                console.log('No API key configured for LLM keyword analysis');
+                return;
+            }
+
+            keywordCallInProgress = true;
+            lastLLMCallIndex = currentIndex;
+            
+            // Show AI analysis indicator
+            document.getElementById('llmIndicator').classList.remove('hidden');
+
+            try {
+                // Get recent segments for analysis (last 3 segments)
+                const recentSegments = segments.slice(Math.max(0, currentIndex - 2), currentIndex + 1);
+                const contextText = recentSegments.map(seg => 
+                    \`[\${seg.time}] \${seg.speaker}: \${seg.content}\`
+                ).join('\\n\\n');
+
+                console.log('Analyzing keywords for segments:', recentSegments.map(s => s.index));
+
+                const keywords = await identifyKeywordsWithLLM(contextText, recentSegments);
+                
+                // Store keywords with their definitions
+                keywords.forEach(kw => {
+                    llmKeywords.set(kw.keyword, {
+                        definition: kw.definition,
+                        segments: recentSegments.map(s => s.index),
+                        confidence: kw.confidence || 0.8
+                    });
+                });
+
+                // Re-render transcript with new keywords
+                renderTranscript();
+                
+                // Update keyword count
+                document.getElementById('keywordCount').textContent = llmKeywords.size;
+                
+                console.log('Identified keywords:', keywords.map(k => k.keyword));
+                
+            } catch (error) {
+                console.error('LLM keyword analysis failed:', error);
+            } finally {
+                keywordCallInProgress = false;
+                // Hide AI analysis indicator
+                document.getElementById('llmIndicator').classList.add('hidden');
+            }
+        }
+
+        async function identifyKeywordsWithLLM(contextText, segments) {
+            const apiKey = localStorage.getItem('mify_api_key');
+            
+            const prompt = \`你是一个智能会议助手。请分析以下会议片段，识别出关键词并为每个关键词提供简洁的一行定义。
+
+会议片段:
+\${contextText}
+
+要求:
+1. 识别3-8个最重要的关键词
+2. 优先选择：技术术语、项目名称、产品名称、重要概念
+3. 为每个关键词提供一行简洁定义（不超过30字）
+4. 返回JSON格式，包含keyword和definition字段
+
+请返回JSON格式:
+{
+  "keywords": [
+    {"keyword": "关键词1", "definition": "简洁定义1"},
+    {"keyword": "关键词2", "definition": "简洁定义2"}
+  ]
+}\`;
+
+            const response = await fetch(MIFY_CONFIG.apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': \`Bearer \${apiKey}\`,
+                    'api-key': apiKey
+                },
+                body: JSON.stringify({
+                    model: MIFY_CONFIG.model,
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.7,
+                    max_tokens: 500
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(\`API call failed: \${response.status}\`);
+            }
+
+            const data = await response.json();
+            const content = data.choices[0].message.content.trim();
+            
+            try {
+                // Extract JSON from response
+                const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);
+                if (!jsonMatch) {
+                    throw new Error('No JSON found in response');
+                }
+                
+                const parsed = JSON.parse(jsonMatch[0]);
+                return parsed.keywords || [];
+                
+            } catch (parseError) {
+                console.error('Failed to parse LLM response:', content);
+                return [];
+            }
+        }
+
+        // Enhanced highlighting with LLM keywords
+        function highlightTerms(text) {
+            let result = text;
+            
+            // First highlight LLM-identified keywords (priority)
+            const llmKeys = Array.from(llmKeywords.keys()).sort((a, b) => b.length - a.length);
+            llmKeys.forEach(keyword => {
+                const escapedTerm = keyword.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+                const regex = new RegExp(\`(\${escapedTerm})\`, 'gi');
+                result = result.replace(regex, \`<span class="highlight llm-keyword" onclick="selectLLMKeyword('\$1')" title="AI识别关键词">\$1</span>\`);
+            });
+            
+            // Then highlight static terms (lower priority)
+            const staticTerms = Array.from(allTerms.keys()).sort((a, b) => b.length - a.length);
+            staticTerms.forEach(term => {
+                // Skip if already highlighted by LLM
+                if (llmKeys.some(k => k.toLowerCase() === term.toLowerCase())) return;
+                
+                const escapedTerm = term.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+                const regex = new RegExp(\`(\${escapedTerm})\`, 'gi');
+                result = result.replace(regex, \`<span class="highlight static-term" onclick="selectTerm('\$1')" title="模式匹配术语">\$1</span>\`);
+            });
+            
+            return result;
+        }
+
+        // Mify LLM API configuration
+        const MIFY_CONFIG = {
+            apiUrl: 'https://service.mify.mioffice.cn/v1/chat/completions',
+            apiKey: '', // Will be set from user input or environment
+            model: 'gpt-4o-mini'
+        };
+
+        // Term selection with LLM-powered definitions
+        async function selectTerm(term) {
+            selectedTerm = term;
+            const termInfo = allTerms.get(term);
+            if (!termInfo) return;
+            
+            // Show loading state
+            showLoadingDefinition(term, termInfo);
+            
+            try {
+                // Generate AI-powered definition
+                const llmDefinition = await generateLLMDefinition(term, termInfo);
+                showLLMDefinition(term, termInfo, llmDefinition);
+            } catch (error) {
+                console.error('LLM definition failed:', error);
+                showFallbackDefinition(term, termInfo, error.message);
+            }
+        }
+
+        function showLoadingDefinition(term, termInfo) {
+            const definitionHtml = \`
+                <div class="definition-card rounded-lg p-4">
+                    <div class="flex items-center gap-3 mb-4">
+                        <h3 class="font-semibold text-lg text-gray-800">\${term}</h3>
+                        <div class="flex items-center gap-2 text-sm text-blue-600">
+                            <div class="animate-spin w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                            <span>AI 生成中...</span>
+                        </div>
+                    </div>
+                    <div class="text-sm text-gray-600 mb-4">
+                        共出现 <span class="font-semibold text-blue-600">\${termInfo.count}</span> 次，正在分析上下文...
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4 text-center text-gray-500">
+                        🤖 正在为您生成智能定义...
+                    </div>
+                    <div class="mt-4">
+                        <h4 class="font-medium text-gray-700 mb-2">出现位置:</h4>
+                        <div class="flex flex-wrap gap-1">
+                            \${termInfo.occurrences.map(idx => 
+                                \`<button onclick="jumpToSegment(\${idx})" class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
+                                    #\${idx + 1} · \${segments[idx] ? segments[idx].time : ''}
+                                </button>\`
+                            ).join('')}
+                        </div>
+                    </div>
+                </div>
+            \`;
+            document.getElementById('definitionContent').innerHTML = definitionHtml;
+        }
+
+        function showLLMDefinition(term, termInfo, llmDefinition) {
+            const definitionHtml = \`
+                <div class="definition-card rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-semibold text-lg text-gray-800">\${term}</h3>
+                        <div class="flex items-center gap-1 text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
+                            <span>🤖</span>
+                            <span>AI 定义</span>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 mb-4 border-l-4 border-blue-400">
+                        <div class="text-sm leading-relaxed text-gray-800">
+                            \${llmDefinition.replace(/\\n/g, '<br>')}
+                        </div>
+                    </div>
+                    
+                    <div class="text-xs text-gray-500 mb-4 flex items-center gap-2">
+                        <span>📊</span>
+                        <span>会议中出现 \${termInfo.count} 次</span>
+                        <span>•</span>
+                        <span>基于上下文智能分析</span>
+                    </div>
+                    
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">出现位置:</h4>
+                        <div class="flex flex-wrap gap-1">
+                            \${termInfo.occurrences.map(idx => 
+                                \`<button onclick="jumpToSegment(\${idx})" class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
+                                    #\${idx + 1} · \${segments[idx] ? segments[idx].time : ''}
+                                </button>\`
+                            ).join('')}
+                        </div>
+                    </div>
+                </div>
+            \`;
+            document.getElementById('definitionContent').innerHTML = definitionHtml;
+        }
+
+        function showFallbackDefinition(term, termInfo, errorMessage) {
+            const definitionHtml = \`
+                <div class="definition-card rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-semibold text-lg text-gray-800">\${term}</h3>
+                        <div class="flex items-center gap-1 text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">
+                            <span>⚠️</span>
+                            <span>基础定义</span>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+                        <div class="text-sm text-yellow-800 mb-2">
+                            <strong>AI 服务暂不可用</strong> (\${errorMessage})
+                        </div>
+                        <div class="text-sm text-gray-700">
+                            这是会议中提到的重要术语。根据上下文分析，"\${term}" 在技术讨论中被多次提及，可能涉及项目名称、技术概念或产品功能。
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <h4 class="font-medium text-gray-700 mb-2">上下文片段:</h4>
+                        <div class="space-y-2">
+                            \${termInfo.contexts.slice(0, 2).map(context => 
+                                \`<div class="bg-white rounded p-3 text-sm border-l-4 border-gray-200">\${context}</div>\`
+                            ).join('')}
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">出现位置:</h4>
+                        <div class="flex flex-wrap gap-1">
+                            \${termInfo.occurrences.map(idx => 
+                                \`<button onclick="jumpToSegment(\${idx})" class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
+                                    #\${idx + 1} · \${segments[idx] ? segments[idx].time : ''}
+                                </button>\`
+                            ).join('')}
+                        </div>
+                    </div>
+                </div>
+            \`;
+            document.getElementById('definitionContent').innerHTML = definitionHtml;
+        }
+
+        async function generateLLMDefinition(term, termInfo) {
+            // Get API key from localStorage or prompt user
+            let apiKey = localStorage.getItem('mify_api_key');
+            if (!apiKey) {
+                apiKey = prompt('请输入 Mify API Key (将安全存储在本地):');
+                if (!apiKey) {
+                    throw new Error('需要 API Key 才能使用 AI 定义功能');
+                }
+                localStorage.setItem('mify_api_key', apiKey);
+            }
+
+            // Prepare context from meeting segments
+            const contextSegments = termInfo.occurrences.slice(0, 3).map(idx => {
+                const seg = segments[idx];
+                return \`[\${seg.time}] \${seg.speaker}: \${seg.content}\`;
+            }).join('\\n\\n');
+
+            const prompt = \`你是一个智能会议助手。请基于以下会议内容，为术语"\${term}"提供一个准确、简洁的定义。
+
+会议上下文:
+\${contextSegments}
+
+要求:
+1. 根据会议上下文理解该术语的具体含义
+2. 提供简洁但详细的定义（2-3句话）
+3. 如果是技术术语，解释其在会议讨论中的作用
+4. 如果是项目/产品名称，说明其主要功能或特点
+5. 用中文回答，语言专业但易懂
+
+请为"\${term}"提供定义:\`;
+
+            const response = await fetch(MIFY_CONFIG.apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': \`Bearer \${apiKey}\`,
+                    'api-key': apiKey
+                },
+                body: JSON.stringify({
+                    model: MIFY_CONFIG.model,
+                    messages: [
+                        {
+                            role: 'user',
+                            content: prompt
+                        }
+                    ],
+                    temperature: 0.7,
+                    max_tokens: 300
+                })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(\`API 调用失败: \${response.status} - \${errorText}\`);
+            }
+
+            const data = await response.json();
+            
+            if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+                throw new Error('API 响应格式错误');
+            }
+
+            return data.choices[0].message.content.trim();
+        }
+
+        // Handle clicks on LLM-identified keywords
+        function selectLLMKeyword(keyword) {
+            selectedTerm = keyword;
+            const keywordInfo = llmKeywords.get(keyword);
+            
+            if (!keywordInfo) {
+                console.error('LLM keyword not found:', keyword);
+                return;
+            }
+
+            const definitionHtml = \`
+                <div class="definition-card rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-semibold text-lg text-gray-800">\${keyword}</h3>
+                        <div class="flex items-center gap-1 text-xs bg-gradient-to-r from-yellow-100 to-orange-100 text-orange-700 px-2 py-1 rounded-full border border-orange-200">
+                            <span>🧠</span>
+                            <span>AI 实时识别</span>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg p-4 mb-4 border-l-4 border-orange-400">
+                        <div class="text-sm leading-relaxed text-gray-800 font-medium">
+                            \${keywordInfo.definition}
+                        </div>
+                    </div>
+                    
+                    <div class="text-xs text-gray-500 mb-4 flex items-center gap-2">
+                        <span>⚡</span>
+                        <span>实时分析识别</span>
+                        <span>•</span>
+                        <span>置信度: \${Math.round(keywordInfo.confidence * 100)}%</span>
+                        <span>•</span>
+                        <span>涉及 \${keywordInfo.segments.length} 个片段</span>
+                    </div>
+                    
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">相关片段:</h4>
+                        <div class="flex flex-wrap gap-1">
+                            \${keywordInfo.segments.map(idx => 
+                                \`<button onclick="jumpToSegment(\${idx})" class="text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition-colors border border-orange-200">
+                                    #\${idx + 1} · \${segments[idx] ? segments[idx].time : ''}
+                                </button>\`
+                            ).join('')}
+                        </div>
+                    </div>
+                </div>
+            \`;
+            
+            document.getElementById('definitionContent').innerHTML = definitionHtml;
+        }
+
+        function jumpToSegment(index) {
+            currentIndex = index;
+            renderTranscript();
+            updateTimeline();
+            
+            // Scroll to the segment
+            const segment = document.querySelector(\`[data-index="\${index}"]\`);
+            if (segment) {
+                segment.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        // Rendering
+        function renderTranscript() {
+            const container = document.getElementById('transcript');
+            container.innerHTML = '';
+            
+            segments.forEach((seg, index) => {
+                const div = document.createElement('div');
+                div.className = \`timeline-segment p-4 rounded-lg mb-3 \${index <= currentIndex ? 'revealed' : 'hidden'}\`;
+                div.setAttribute('data-index', index);
+                
+                const highlightedContent = highlightTerms(seg.content);
+                
+                div.innerHTML = \`
+                    <div class="flex items-center gap-3 mb-2">
+                        <span class="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-1 rounded">\${seg.time}</span>
+                        <span class="text-sm font-medium text-gray-700 bg-blue-50 px-3 py-1 rounded-full">\${seg.speaker}</span>
+                    </div>
+                    <div class="text-sm leading-relaxed text-gray-800">\${highlightedContent}</div>
+                \`;
+                
+                container.appendChild(div);
+            });
+            
+            // Update progress
+            document.getElementById('progress').textContent = \`\${Math.max(0, currentIndex + 1)}/\${segments.length}\`;
+        }
+
+        // Timeline controls
+        function togglePlay() {
+            const btn = document.getElementById('playBtn');
+            if (isPlaying) {
+                clearInterval(playInterval);
+                btn.textContent = '▶️ 播放';
+                btn.className = 'px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors';
+            } else {
+                playInterval = setInterval(async () => {
+                    if (currentIndex < segments.length - 1) {
+                        currentIndex++;
+                        renderTranscript();
+                        updateTimeline();
+                        
+                        // Check if we should call LLM for keyword analysis
+                        await checkForLLMKeywordAnalysis();
+                    } else {
+                        togglePlay();
+                    }
+                }, 25000); // 25 seconds interval
+                btn.textContent = '⏸️ 暂停';
+                btn.className = 'px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors';
+            }
+            isPlaying = !isPlaying;
+        }
+
+        function reset() {
+            if (isPlaying) togglePlay();
+            currentIndex = -1;
+            lastLLMCallIndex = -1;
+            keywordCallInProgress = false;
+            llmKeywords.clear();
+            renderTranscript();
+            updateTimeline();
+            
+            // Clear definition panel
+            document.getElementById('definitionContent').innerHTML = \`
+                <div class="text-sm text-gray-500 text-center py-8">
+                    点击左侧高亮术语查看定义
+                </div>
+            \`;
+        }
+
+        function updateTimeline() {
+            const timeline = document.getElementById('timeline');
+            const currentTime = document.getElementById('currentTime');
+            
+            if (segments.length > 0) {
+                const maxTime = segments[segments.length - 1].timeSeconds;
+                timeline.max = maxTime;
+                document.getElementById('maxTime').textContent = formatTime(maxTime);
+                
+                if (currentIndex >= 0) {
+                    timeline.value = segments[currentIndex].timeSeconds;
+                    currentTime.textContent = formatTime(segments[currentIndex].timeSeconds);
+                } else {
+                    timeline.value = 0;
+                    currentTime.textContent = '0:00';
+                }
+            }
+        }
+
+        function seekTo(value) {
+            const targetTime = parseInt(value);
+            currentIndex = segments.findIndex(seg => seg.timeSeconds > targetTime) - 1;
+            if (currentIndex < 0) currentIndex = segments.length - 1;
+            renderTranscript();
+            document.getElementById('currentTime').textContent = formatTime(targetTime);
+        }
+
+        // Chat functionality
+        function askQuestion() {
+            const input = document.getElementById('chatInput');
+            const question = input.value.trim();
+            if (!question) return;
+            
+            // Add user message
+            addChatMessage('user', question);
+            
+            // Simulate AI response
+            setTimeout(() => {
+                const response = generateResponse(question);
+                addChatMessage('assistant', response);
+            }, 1000);
+            
+            input.value = '';
+        }
+
+        function addChatMessage(role, content) {
+            const container = document.getElementById('chatMessages');
+            
+            // Remove placeholder if it exists
+            const placeholder = container.querySelector('.text-center');
+            if (placeholder) placeholder.remove();
+            
+            const div = document.createElement('div');
+            div.className = 'chat-message';
+            
+            if (role === 'user') {
+                div.innerHTML = \`
+                    <div class="bg-blue-100 rounded-lg p-3 text-sm">
+                        <div class="font-medium text-blue-800 mb-1">您:</div>
+                        <div class="text-blue-700">\${content}</div>
+                    </div>
+                \`;
+            } else {
+                div.innerHTML = \`
+                    <div class="bg-gray-100 rounded-lg p-3 text-sm">
+                        <div class="font-medium text-gray-800 mb-1">助手:</div>
+                        <div class="text-gray-700">\${content}</div>
+                    </div>
+                \`;
+            }
+            
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function generateResponse(question) {
+            // Simple response generation based on question content
+            if (question.includes('项目') || question.includes('黑马')) {
+                return '会议中提到了"黑马项目"，他们在全捷 OA 上部署了1.5B的端观测模型，参数量比目前的要大得多。可以考虑联系他们了解更多细节。';
+            } else if (question.includes('困难') || question.includes('问题')) {
+                return '会议中提到的主要困难包括：1) 手机开发资源短缺；2) 隐私模式没有特别好的思路；3) 语音相关的解决方案还需要完善。';
+            } else if (question.includes('模型') || question.includes('AI')) {
+                return '会议讨论了1.5B参数的端观测模型，这比目前使用的模型参数量要大得多。还提到了端侧模型的部署和相关技术挑战。';
+            } else {
+                return '根据会议内容，我找到了相关的讨论片段。您可以点击左侧时间线中的相关部分查看具体内容，或者尝试更具体的问题。';
+            }
+        }
+
+        // Modal functions
+        function showPasteModal() {
+            document.getElementById('pasteModal').classList.remove('hidden');
+            document.getElementById('pasteModal').classList.add('flex');
+        }
+
+        function closePasteModal() {
+            document.getElementById('pasteModal').classList.add('hidden');
+            document.getElementById('pasteModal').classList.remove('flex');
+        }
+
+        function loadTranscript() {
+            const text = document.getElementById('pasteArea').value.trim();
+            if (!text) return;
+            
+            // Parse and load new transcript
+            segments = parseTranscript(text);
+            allTerms = extractTerms(segments);
+            
+            // Reset state
+            currentIndex = -1;
+            selectedTerm = null;
+            lastLLMCallIndex = -1;
+            keywordCallInProgress = false;
+            llmKeywords.clear();
+            
+            // Re-render
+            renderTranscript();
+            updateTimeline();
+            
+            // Update keyword count
+            document.getElementById('keywordCount').textContent = '0';
+            
+            // Clear definition panel
+            document.getElementById('definitionContent').innerHTML = \`
+                <div class="text-sm text-gray-500 text-center py-8">
+                    点击左侧高亮术语查看定义
+                </div>
+            \`;
+            
+            // Clear chat
+            document.getElementById('chatMessages').innerHTML = \`
+                <div class="text-sm text-gray-500 text-center py-4">
+                    询问关于本次会议的任何问题...
+                </div>
+            \`;
+            
+            closePasteModal();
+            console.log('Loaded transcript:', segments.length, 'segments,', allTerms.size, 'terms');
+        }
+
+        // Settings modal functions
+        function showSettingsModal() {
+            // Load current API key if exists
+            const currentKey = localStorage.getItem('mify_api_key');
+            if (currentKey) {
+                document.getElementById('apiKeyInput').value = currentKey;
+            }
+            
+            document.getElementById('settingsModal').classList.remove('hidden');
+            document.getElementById('settingsModal').classList.add('flex');
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settingsModal').classList.add('hidden');
+            document.getElementById('settingsModal').classList.remove('flex');
+            document.getElementById('apiStatus').classList.add('hidden');
+        }
+
+        function saveApiKey() {
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+            if (apiKey) {
+                localStorage.setItem('mify_api_key', apiKey);
+                showApiStatus('success', '✅ API Key 已保存');
+            } else {
+                showApiStatus('error', '❌ 请输入有效的 API Key');
+            }
+        }
+
+        function clearApiKey() {
+            localStorage.removeItem('mify_api_key');
+            document.getElementById('apiKeyInput').value = '';
+            showApiStatus('info', '🗑️ API Key 已清除');
+        }
+
+        async function testApiKey() {
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+            if (!apiKey) {
+                showApiStatus('error', '❌ 请先输入 API Key');
+                return;
+            }
+
+            showApiStatus('loading', '🔄 正在测试连接...');
+
+            try {
+                const response = await fetch(MIFY_CONFIG.apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': \`Bearer \${apiKey}\`,
+                        'api-key': apiKey
+                    },
+                    body: JSON.stringify({
+                        model: MIFY_CONFIG.model,
+                        messages: [{ role: 'user', content: '测试连接' }],
+                        max_tokens: 10
+                    })
+                });
+
+                if (response.ok) {
+                    showApiStatus('success', '✅ 连接成功！API Key 有效');
+                } else {
+                    const errorText = await response.text();
+                    showApiStatus('error', \`❌ 连接失败: \${response.status}\`);
+                }
+            } catch (error) {
+                showApiStatus('error', \`❌ 网络错误: \${error.message}\`);
+            }
+        }
+
+        function showApiStatus(type, message) {
+            const statusEl = document.getElementById('apiStatus');
+            statusEl.classList.remove('hidden');
+            
+            let bgColor, textColor;
+            switch (type) {
+                case 'success':
+                    bgColor = 'bg-green-50 border-green-200';
+                    textColor = 'text-green-800';
+                    break;
+                case 'error':
+                    bgColor = 'bg-red-50 border-red-200';
+                    textColor = 'text-red-800';
+                    break;
+                case 'loading':
+                    bgColor = 'bg-blue-50 border-blue-200';
+                    textColor = 'text-blue-800';
+                    break;
+                default:
+                    bgColor = 'bg-gray-50 border-gray-200';
+                    textColor = 'text-gray-800';
+            }
+            
+            statusEl.innerHTML = \`
+                <div class="rounded-lg p-3 border \${bgColor}">
+                    <div class="text-sm \${textColor}">\${message}</div>
+                </div>
+            \`;
+        }
+
+        // Initialize
+        function init() {
+            console.log('Initializing Post-Meeting Agent...');
+            segments = parseTranscript(sampleTranscript);
+            allTerms = extractTerms(segments);
+            renderTranscript();
+            updateTimeline();
+            console.log('Ready:', segments.length, 'segments,', allTerms.size, 'terms');
+        }
+
+        // Navigation functions
+        function showHistoryPage() {
+            currentView = 'history';
+            document.getElementById('historyPage').classList.remove('hidden');
+            loadAllTranscriptions();
+        }
+        
+        function showAgentPage() {
+            currentView = 'agent';
+            document.getElementById('historyPage').classList.add('hidden');
+        }
+        
+        // Transcription management
+        async function loadAllTranscriptions() {
+            const transcriptionFiles = [
+                '20250630.txt',
+                '20250703.txt'
+            ];
+            
+            allTranscriptions.clear();
+            
+            for (const filename of transcriptionFiles) {
+                try {
+                    const response = await fetch(`transcriptions/${filename}`);
+                    if (response.ok) {
+                        const content = await response.text();
+                        const metadata = extractTranscriptionMetadata(content, filename);
+                        allTranscriptions.set(filename, {
+                            metadata,
+                            content,
+                            parsed: null
+                        });
+                    }
+                } catch (error) {
+                    console.error(`Failed to load ${filename}:`, error);
+                }
+            }
+            
+            renderTranscriptionsList();
+        }
+        
+        function extractTranscriptionMetadata(content, filename) {
+            const lines = content.split('\n').filter(line => line.trim());
+            const segments = parseTranscript(content);
+            
+            // Extract date from filename
+            const dateMatch = filename.match(/(\d{8})/);
+            const date = dateMatch ? 
+                `${dateMatch[1].substring(0,4)}-${dateMatch[1].substring(4,6)}-${dateMatch[1].substring(6,8)}` : 
+                '未知日期';
+            
+            // Extract participants
+            const participants = Array.from(new Set(
+                segments.map(seg => seg.speaker).filter(Boolean)
+            ));
+            
+            // Calculate duration
+            let totalDuration = 0;
+            if (segments.length > 0) {
+                const lastSegment = segments[segments.length - 1];
+                if (lastSegment.time) {
+                    const timeMatch = lastSegment.time.match(/(\d+):(\d+)/);
+                    if (timeMatch) {
+                        totalDuration = parseInt(timeMatch[1]) * 60 + parseInt(timeMatch[2]);
+                    }
+                }
+            }
+            
+            return {
+                filename,
+                date,
+                participants,
+                duration: totalDuration,
+                segmentCount: segments.length,
+                title: `会议记录 - ${date}`
+            };
+        }
+        
+        function renderTranscriptionsList() {
+            const container = document.getElementById('transcriptionsList');
+            const transcriptions = Array.from(allTranscriptions.values()).sort((a, b) => 
+                b.metadata.date.localeCompare(a.metadata.date)
+            );
+            
+            document.getElementById('transcriptCount').textContent = `${transcriptions.length} 个转录`;
+            
+            if (transcriptions.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-12 text-gray-500">
+                        <div class="text-4xl mb-4">📭</div>
+                        <p class="text-lg">暂无会议记录</p>
+                        <p class="text-sm mt-2">点击"新增转录"开始记录您的会议</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = transcriptions.map(trans => `
+                <div class="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-shadow">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1">
+                            <h3 class="text-lg font-semibold text-gray-900 mb-2">${trans.metadata.title}</h3>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-gray-600 mb-4">
+                                <div class="flex items-center gap-1">
+                                    <span>📅</span>
+                                    <span>${trans.metadata.date}</span>
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <span>⏱️</span>
+                                    <span>${Math.floor(trans.metadata.duration / 60)}:${(trans.metadata.duration % 60).toString().padStart(2, '0')}</span>
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <span>💬</span>
+                                    <span>${trans.metadata.segmentCount} 个片段</span>
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <span>👥</span>
+                                    <span>${trans.metadata.participants.length} 人参与</span>
+                                </div>
+                            </div>
+                            <div class="flex flex-wrap gap-1 mb-3">
+                                ${trans.metadata.participants.map(p => 
+                                    `<span class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">${p}</span>`
+                                ).join('')}
+                            </div>
+                        </div>
+                        <div class="flex gap-2 ml-4">
+                            <button onclick="loadTranscription('${trans.metadata.filename}')" 
+                                    class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm">
+                                🎯 分析此会议
+                            </button>
+                            <button onclick="deleteTranscription('${trans.metadata.filename}')" 
+                                    class="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors text-sm">
+                                🗑️
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function loadTranscription(filename) {
+            const transcription = allTranscriptions.get(filename);
+            if (!transcription) {
+                alert('转录文件未找到');
+                return;
+            }
+            
+            // Parse and load the transcription
+            segments = parseTranscript(transcription.content);
+            allTerms = extractTerms(segments);
+            currentTranscriptionId = filename;
+            
+            // Reset state
+            currentIndex = -1;
+            selectedTerm = null;
+            lastLLMCallIndex = -1;
+            keywordCallInProgress = false;
+            llmKeywords.clear();
+            
+            // Update UI
+            document.getElementById('currentTranscriptInfo').textContent = transcription.metadata.title;
+            document.getElementById('currentTranscriptInfo').classList.remove('hidden');
+            document.getElementById('keywordCount').textContent = '0';
+            
+            // Re-render
+            renderTranscript();
+            updateTimeline();
+            
+            // Clear definition panel
+            document.getElementById('definitionContent').innerHTML = `
+                <div class="text-sm text-gray-500 text-center py-8">
+                    点击左侧高亮术语查看定义
+                </div>
+            `;
+            
+            // Switch back to agent view
+            showAgentPage();
+            
+            alert(`已加载会议记录: ${transcription.metadata.title}`);
+        }
+        
+        function deleteTranscription(filename) {
+            if (confirm(`确定要删除 "${filename}" 吗？此操作无法撤销。`)) {
+                allTranscriptions.delete(filename);
+                if (currentTranscriptionId === filename) {
+                    // Clear current transcription if it was deleted
+                    segments = [];
+                    currentTranscriptionId = null;
+                    document.getElementById('currentTranscriptInfo').classList.add('hidden');
+                    renderTranscript();
+                    updateTimeline();
+                }
+                renderTranscriptionsList();
+            }
+        }
+
+        // Enhanced initialization
+        function initializeWithHistory() {
+            console.log('Initializing Post-Meeting Agent with History...');
+            
+            // Load example data as default
+            segments = parseTranscript(sampleTranscript);
+            allTerms = extractTerms(segments);
+            renderTranscript();
+            updateTimeline();
+            
+            // Pre-load all transcriptions for history
+            loadAllTranscriptions();
+            
+            console.log('Ready:', segments.length, 'segments,', allTerms.size, 'terms');
+        }
+
+        // Start when page loads
+        window.onload = initializeWithHistory;
+    </script>
+</body>
+</html>
