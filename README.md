@@ -175,3 +175,36 @@ brew install node
 2. **Install Node.js** for full React experience  
 3. **Organize workflow** based on your needs
 4. **Performance test** with your specific use cases
+
+### Chat Interface
+
+- **Location**: `src/components/RAGChat.tsx` (integrated in `src/components/MeetingAgent.tsx` and the main app UI). A simple chat is also available in `demos/chinese-agent.html` and `demos/meeting-agent.html`.
+- **What it does**: Conversational interface over the meeting knowledge base. It routes prompts through the local RAG pipeline (`src/services/RAGService.ts`, `src/services/VectorService.ts`) with the currently selected meeting context.
+- **How to use**:
+  - Run the React app: `npm install && npm run dev`, then open the app and use the chat panel on the right.
+  - Or open a demo directly: `open demos/chinese-agent.html` for a zero-setup chat that you can test with files in `transcriptions/`.
+- **Features**:
+  - Context-aware responses grounded in selected transcription(s)
+  - Term extraction, timeline references, and highlight support (where applicable)
+  - Extensible prompt and tool hooks for future automations
+
+### MCP for Feishu (Optional, Cross‑App Integration)
+
+You can deploy an MCP (Model Context Protocol) server to make these meeting tools available across Feishu (Lark) chats and apps.
+
+- **Why MCP**: Centralizes capabilities (RAG, parsing, summarization) behind a protocol so multiple Feishu entry points (DMs, group chats, apps) can share the same toolset.
+- **High‑level architecture**:
+  - Feishu Bot/App → Event Subscription (message events) → MCP Gateway/Server → Tools (RAG, vector search, summaries) → Feishu Reply
+- **Setup outline**:
+  1. Create a Feishu app/bot and enable event subscriptions (message receive). Note required permissions like `im:message`, `im:chat`, etc.
+  2. Deploy an MCP server (container or serverless). Expose HTTPS endpoint for Feishu callbacks and your MCP RPC endpoint.
+  3. Configure environment variables for deployment:
+     - `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_ENCRYPT_KEY`, `FEISHU_VERIFICATION_TOKEN`
+     - `MCP_ENDPOINT` (your MCP server URL)
+     - Storage/embedding config as needed by your vector store
+  4. On incoming Feishu messages, forward requests to MCP tools (RAG query, summary, action routing) and return responses to Feishu.
+- **Security & compliance**:
+  - Verify Feishu request signatures and tokens.
+  - Limit tool scopes; redact PII when logging.
+  - Use HTTPS and rotate secrets regularly.
+- **Status**: This repo’s UI and services are MCP‑friendly by design. The MCP server implementation is deployment‑specific and can be added as a separate service/module.
